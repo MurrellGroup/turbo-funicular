@@ -1,0 +1,22 @@
+{
+  "samples": [
+    {
+      "id": "plinder-19206",
+      "label": "Compact pocket / Plinder 19206",
+      "atoms": 295,
+      "file": "plinder-19206.json"
+    },
+    {
+      "id": "plinder-11668",
+      "label": "Medium pocket / Plinder 11668",
+      "atoms": 456,
+      "file": "plinder-11668.json"
+    },
+    {
+      "id": "plinder-424",
+      "label": "Large pocket / Plinder 424",
+      "atoms": 702,
+      "file": "plinder-424.json"
+    }
+  ]
+}

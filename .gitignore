@@ -1,0 +1,10 @@
+node_modules/
+__pycache__/
+*.py[cod]
+dist/
+public/assets/model/
+public/assets/parity/
+test-results/
+test-results*.png
+screenshots-*.png
+*.log

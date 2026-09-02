@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WSFMDock WebGPU</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main>
+      <section id="viewport" aria-label="Molecular inference viewport"></section>
+      <header>
+        <div>
+          <p class="eyebrow">WSFMDock / WebGPU</p>
+          <h1>Live few-step docking</h1>
+        </div>
+        <div class="device-state">
+          <span id="device-dot"></span>
+          <span id="device-label">Initializing WebGPU</span>
+        </div>
+      </header>
+      <aside class="controls">
+        <label>
+          Pocket
+          <select id="sample-select" disabled></select>
+        </label>
+        <div class="field-row">
+          <label>
+            Steps
+            <select id="step-select">
+              <option value="4">4</option>
+              <option value="8" selected>8</option>
+              <option value="16">16</option>
+            </select>
+          </label>
+          <label>
+            Seed
+            <input id="seed-input" type="number" value="20260902" min="1" step="1" />
+          </label>
+        </div>
+        <button id="run-button" type="button" disabled>
+          <span id="run-icon">&#9654;</span>
+          <span id="run-label">Run inference</span>
+        </button>
+        <button id="reset-camera" class="secondary" type="button" disabled>Reset view</button>
+        <dl class="metrics">
+          <div><dt>Model</dt><dd id="model-label">Loading manifest</dd></div>
+          <div><dt>Atoms</dt><dd id="atom-count">-</dd></div>
+          <div><dt>Step</dt><dd id="step-status">-</dd></div>
+          <div><dt>Last map</dt><dd id="map-time">-</dd></div>
+          <div><dt>Total</dt><dd id="total-time">-</dd></div>
+          <div><dt>GPU memory</dt><dd id="memory-label">-</dd></div>
+        </dl>
+        <div class="progress"><span id="progress-bar"></span></div>
+        <p id="status" role="status">Requesting a WebGPU adapter.</p>
+      </aside>
+      <div class="legend" aria-label="Atom role legend">
+        <span><i class="protein"></i>Protein</span>
+        <span><i class="sidechain"></i>Moving side chain</span>
+        <span><i class="ligand"></i>Ligand</span>
+      </div>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
+
