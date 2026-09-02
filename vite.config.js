@@ -7,6 +7,7 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 8791,
     strictPort: true,
+    hmr: false,
   },
   preview: {
     host: "0.0.0.0",

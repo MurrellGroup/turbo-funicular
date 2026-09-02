@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "test:browser": "node tests/parity.mjs"
+    "test:browser": "node tests/parity.mjs",
+    "test:graph": "node tests/graph_sensitivity.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-basic-ssl": "^2.1.0",
@@ -17,4 +18,3 @@
     "playwright": "^1.55.0"
   }
 }
-

@@ -33,14 +33,15 @@ The development server uses HTTPS because WebGPU requires a secure context.
 
 ## Parity
 
-Generate the explicit-noise PyTorch fixture with `tools/export_parity.py`, then
-run the browser test under an X server:
+Generate the single-map and multi-map explicit-noise PyTorch fixtures with
+`tools/export_parity.py` and `tools/export_trajectory_parity.py`, then run the
+browser test under an X server:
 
 ```bash
 xvfb-run -a npm run test:browser
+xvfb-run -a npm run test:graph
 ```
 
 Attention uses online softmax over 4x32 query/key tiles. Molecular bonds remain
 an `atoms x 10` sparse neighbor list and are resolved inside each attention
 tile; no `atoms x atoms` pair-feature allocation is made.
-

@@ -111,7 +111,8 @@ async function initialize() {
     DockingWebGpuModel.create(device),
   ]);
   model = loadedModel;
-  ui["model-label"].textContent = `legacy CK ${model.weights.manifest.iteration.toLocaleString()}`;
+  const checkpoint = model.weights.manifest.checkpoint_sha256.slice(0, 8);
+  ui["model-label"].textContent = `post-joint CK ${model.weights.manifest.iteration.toLocaleString()} / ${checkpoint}`;
   for (const entry of catalog.samples) {
     const option = document.createElement("option");
     option.value = entry.file;

@@ -18,21 +18,19 @@ try {
   const page = await browser.newPage({ ignoreHTTPSErrors: true });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  page.on("requestfailed", (request) => errors.push(
+    `${request.method()} ${request.url()}: ${request.failure()?.errorText}`,
+  ));
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
   await page.evaluate(() => window.__wsfmdock.ready);
   const result = await page.evaluate(async () => {
     const fixture = await fetch("/assets/parity/transition.json").then((response) => response.json());
+    const trajectory = await fetch("/assets/parity/trajectory.json").then((response) => response.json());
     const model = window.__wsfmdock.model;
     const sample = window.__wsfmdock.sample;
-    model.setCoordinates(new Float32Array(fixture.coords));
-    const milliseconds = await model.transition(
-      fixture.start,
-      fixture.end,
-      new Float32Array(fixture.increment),
-      new Float32Array(fixture.latent),
-    );
-    const coordinates = await model.coordinates();
-    const secant = await model.secantEndpoint();
     const metrics = (actual, expected, movingOnly) => {
       let sum = 0;
       let reference = 0;
@@ -52,12 +50,37 @@ try {
         maximum,
       };
     };
+    model.setCoordinates(new Float32Array(fixture.coords));
+    const milliseconds = await model.transition(
+      fixture.start,
+      fixture.end,
+      new Float32Array(fixture.increment),
+      new Float32Array(fixture.latent),
+    );
+    const coordinates = await model.coordinates();
+    const secant = await model.secantEndpoint();
+    model.setCoordinates(new Float32Array(trajectory.initial_coords));
+    const trajectoryMetrics = [];
+    for (const transition of trajectory.transitions) {
+      await model.transition(
+        transition.start,
+        transition.end,
+        new Float32Array(transition.increment),
+        new Float32Array(transition.latent),
+      );
+      trajectoryMetrics.push(metrics(
+        await model.coordinates(),
+        transition.expected_coords,
+        true,
+      ));
+    }
     return {
       milliseconds,
       coordinates: metrics(coordinates, fixture.expected_coords, false),
       movingCoordinates: metrics(coordinates, fixture.expected_coords, true),
       secant: metrics(secant, fixture.expected_secant, false),
       movingSecant: metrics(secant, fixture.expected_secant, true),
+      trajectory: trajectoryMetrics,
     };
   });
   if (errors.length) throw new Error(`Browser errors: ${errors.join("; ")}`);
@@ -67,8 +90,11 @@ try {
   if (result.movingSecant.rms >= 5e-4) {
     throw new Error(`Secant RMS parity failed: ${result.movingSecant.rms}`);
   }
+  const trajectoryRms = Math.max(...result.trajectory.map((entry) => entry.rms));
+  if (trajectoryRms >= 2e-4) {
+    throw new Error(`Trajectory RMS parity failed: ${trajectoryRms}`);
+  }
   console.log(JSON.stringify(result, null, 2));
 } finally {
   await browser.close();
 }
-
