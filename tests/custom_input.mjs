@@ -29,6 +29,17 @@ try {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
   await page.evaluate(() => window.__wsfmdock.ready);
   await page.click("#custom-tab");
+  await page.fill("#pdb-id-input", "1HVR");
+  await page.click("#fetch-pdb");
+  await page.waitForFunction(() => window.__wsfmdock.sample?.id === "pdb-1HVR.pdb");
+  const fetched = await page.evaluate(() => ({
+    atoms: window.__wsfmdock.sample.atoms,
+    ligandAtoms: window.__wsfmdock.sample.roles.filter((role) => role === 3).length,
+  }));
+  if (fetched.atoms !== 1546 || fetched.ligandAtoms !== 46) {
+    throw new Error(`PDB-ID preparation differs: ${JSON.stringify(fetched)}`);
+  }
+
   await page.setInputFiles("#pdb-input", {
     name: "mini.pdb",
     mimeType: "chemical/x-pdb",
@@ -60,7 +71,7 @@ try {
   await page.selectOption("#step-select", "4");
   await page.click("#run-button");
   await page.waitForFunction(
-    () => document.getElementById("status").textContent.startsWith("Trajectory complete."),
+    () => document.getElementById("status").textContent.startsWith("Inference complete."),
     null,
     { timeout: 120_000 },
   );
@@ -105,7 +116,7 @@ try {
     throw new Error(`Mobile layout overflowed: ${JSON.stringify(mobile)}`);
   }
   if (errors.length) throw new Error(`Browser errors: ${errors.join("; ")}`);
-  console.log(JSON.stringify({ pdb, smiles, inference, mobile }, null, 2));
+  console.log(JSON.stringify({ fetched, pdb, smiles, inference, mobile }, null, 2));
 } finally {
   await browser.close();
 }

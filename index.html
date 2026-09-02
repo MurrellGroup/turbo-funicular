@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WSFMDock WebGPU</title>
+    <title>WSFMDock</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
@@ -12,8 +12,8 @@
       <section id="viewport" aria-label="Molecular inference viewport"></section>
       <header>
         <div>
-          <p class="eyebrow">WSFMDock / WebGPU</p>
-          <h1>Live few-step docking</h1>
+          <p class="eyebrow">WSFMDock</p>
+          <h1>Interactive docking</h1>
         </div>
         <div class="device-state">
           <span id="device-dot"></span>
@@ -33,6 +33,13 @@
         </section>
         <section id="custom-panel" class="source-panel" role="tabpanel" hidden>
           <input id="pdb-input" type="file" accept=".pdb,.ent,chemical/x-pdb" hidden />
+          <div class="pdb-id-row">
+            <label>
+              PDB ID
+              <input id="pdb-id-input" type="text" value="1HVR" maxlength="4" spellcheck="false" autocomplete="off" />
+            </label>
+            <button id="fetch-pdb" class="secondary source-command" type="button" disabled>Load</button>
+          </div>
           <button id="open-pdb" class="secondary source-command" type="button" disabled>Open PDB</button>
           <label>
             PDB ligand

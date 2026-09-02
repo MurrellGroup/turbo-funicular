@@ -72,6 +72,14 @@ h1 { margin: 0; font-size: 22px; line-height: 1.15; font-weight: 620; letter-spa
 .source-panel label + label { margin-top: 10px; }
 .source-panel .source-command { margin: 0 0 10px; }
 .source-panel #replace-ligand { margin: 10px 0 0; }
+.pdb-id-row {
+  display: grid;
+  grid-template-columns: 1fr 72px;
+  align-items: end;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.pdb-id-row .source-command { height: 36px; margin: 0; }
 .structure-label {
   margin: 9px 0 0;
   overflow-wrap: anywhere;

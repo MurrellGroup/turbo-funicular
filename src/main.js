@@ -1,6 +1,7 @@
 import { DockingWebGpuModel } from "./model.js";
 import { MolecularViewer } from "./viewer.js";
 import { graphFromSmiles } from "./chemistry.js";
+import { assetUrl, MODEL_MANIFEST_URL } from "./config.js";
 import { parsePdb, preparePdbSample, replaceLigand } from "./prep.js";
 import { loadRdkit } from "./rdkit.js";
 
@@ -10,6 +11,7 @@ const ui = Object.fromEntries([
   "step-status", "map-time", "total-time", "memory-label", "progress-bar", "status",
   "example-tab", "custom-tab", "example-panel", "custom-panel", "pdb-input",
   "open-pdb", "ligand-select", "smiles-input", "replace-ligand", "structure-label",
+  "pdb-id-input", "fetch-pdb",
 ].map((id) => [id, document.getElementById(id)]));
 
 const viewer = new MolecularViewer(document.getElementById("viewport"));
@@ -48,7 +50,7 @@ async function applySample(nextSample, readyStatus = "Weights are resident on th
 
 async function loadSample(file) {
   setStatus("Loading the selected molecular system.");
-  presetSample = await fetch(`/assets/samples/${file}`).then((response) => response.json());
+  presetSample = await fetch(assetUrl(`assets/samples/${file}`)).then((response) => response.json());
   return applySample(presetSample);
 }
 
@@ -63,11 +65,12 @@ function setSourceMode(mode) {
 }
 
 function setInputBusy(busy) {
-  for (const id of ["run-button", "sample-select", "open-pdb", "replace-ligand", "example-tab", "custom-tab"]) {
+  for (const id of ["run-button", "sample-select", "open-pdb", "fetch-pdb", "replace-ligand", "example-tab", "custom-tab"]) {
     ui[id].disabled = busy;
   }
   ui["ligand-select"].disabled = busy || !pdbStructure?.ligandOptions.length;
   ui["smiles-input"].disabled = busy;
+  ui["pdb-id-input"].disabled = busy;
 }
 
 function ligandOptions(structure) {
@@ -124,6 +127,21 @@ async function preparePdbFile(file) {
   await preparePdb(await file.text(), file.name);
 }
 
+async function fetchPdb(pdbId = ui["pdb-id-input"].value) {
+  const id = pdbId.trim().toUpperCase();
+  if (!/^[A-Z0-9]{4}$/.test(id)) throw new Error("Enter a four-character PDB ID.");
+  setInputBusy(true);
+  setStatus(`Loading ${id}.`);
+  try {
+    const response = await fetch(`https://files.rcsb.org/download/${encodeURIComponent(id)}.pdb`);
+    if (!response.ok) throw new Error(`PDB ${id} could not be loaded (${response.status}).`);
+    ui["pdb-id-input"].value = id;
+    return await preparePdb(await response.text(), `${id}.pdb`);
+  } finally {
+    setInputBusy(false);
+  }
+}
+
 async function applySmiles(smiles = ui["smiles-input"].value) {
   if (running || !sample) return;
   setInputBusy(true);
@@ -162,20 +180,20 @@ async function runInference() {
       const end = (index + 1) / steps;
       ui["step-status"].textContent = `${index + 1} / ${steps}`;
       ui["progress-bar"].style.width = `${100 * index / steps}%`;
-      setStatus(`Evaluating finite map ${index + 1} of ${steps} on WebGPU.`);
+      setStatus(`Running step ${index + 1} of ${steps}.`);
       await new Promise((resolve) => requestAnimationFrame(resolve));
       const noise = model.drawNoise(start, end, rng);
       const elapsed = await model.transition(start, end, noise.increment, noise.latent);
       const next = await model.coordinates();
       ui["map-time"].textContent = `${elapsed.toFixed(1)} ms`;
-      setStatus(`Map ${index + 1} completed in ${elapsed.toFixed(1)} ms.`);
+      setStatus(`Step ${index + 1} completed in ${elapsed.toFixed(1)} ms.`);
       await viewer.interpolate(previous, next, Math.min(420, Math.max(160, elapsed * 0.25)));
       previous = next;
       ui["progress-bar"].style.width = `${100 * (index + 1) / steps}%`;
     }
     const total = performance.now() - started;
     ui["total-time"].textContent = `${(total / 1000).toFixed(2)} s`;
-    setStatus(`Trajectory complete. ${steps} stochastic maps evaluated entirely in-browser.`);
+    setStatus(`Inference complete. ${steps} steps evaluated in-browser.`);
   } catch (error) {
     console.error(error);
     setStatus(`Inference failed: ${error.message}`);
@@ -190,7 +208,9 @@ async function initialize() {
   if (!navigator.gpu) throw new Error("This browser does not expose WebGPU.");
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
   if (!adapter) throw new Error("No WebGPU adapter is available.");
-  const manifest = await fetch("/assets/model/manifest.json").then((response) => response.json());
+  const manifestResponse = await fetch(MODEL_MANIFEST_URL);
+  if (!manifestResponse.ok) throw new Error(`Model manifest failed: ${manifestResponse.status}`);
+  const manifest = await manifestResponse.json();
   const needsF16 = manifest.activation_precision === "float16";
   if (needsF16 && !adapter.features.has("shader-f16")) {
     throw new Error("This model payload requires WebGPU shader-f16, which the adapter does not expose.");
@@ -214,17 +234,17 @@ async function initialize() {
   });
   ui["device-label"].textContent = adapter.info?.description
     || `WebGPU / ${needsF16 ? "FP16" : "FP32"}`;
-  setStatus("Compiling fused kernels and uploading the legacy CK checkpoint.");
+  setStatus("Preparing the model.");
   const [loadedCatalog, loadedModel, loadedRdkit] = await Promise.all([
-    fetch("/assets/samples/catalog.json").then((response) => response.json()),
-    DockingWebGpuModel.create(device),
+    fetch(assetUrl("assets/samples/catalog.json")).then((response) => response.json()),
+    DockingWebGpuModel.create(device, MODEL_MANIFEST_URL, manifest),
     loadRdkit(),
   ]);
   catalog = loadedCatalog;
   model = loadedModel;
   rdkit = loadedRdkit;
   const checkpoint = model.weights.manifest.checkpoint_sha256.slice(0, 8);
-  ui["model-label"].textContent = `post-joint CK ${model.weights.manifest.iteration.toLocaleString()} / ${checkpoint}`;
+  ui["model-label"].textContent = `${model.weights.manifest.iteration.toLocaleString()} / ${checkpoint}`;
   for (const entry of catalog.samples) {
     const option = document.createElement("option");
     option.value = entry.file;
@@ -237,6 +257,7 @@ async function initialize() {
   ui["sample-select"].disabled = false;
   ui["reset-camera"].disabled = false;
   ui["open-pdb"].disabled = false;
+  ui["fetch-pdb"].disabled = false;
   ui["replace-ligand"].disabled = false;
   return { device, model, catalog };
 }
@@ -253,6 +274,10 @@ ui["custom-tab"].addEventListener("click", async () => {
   if (customSample && sample !== customSample) await applySample(customSample);
 });
 ui["open-pdb"].addEventListener("click", () => ui["pdb-input"].click());
+ui["fetch-pdb"].addEventListener("click", () => fetchPdb().catch((error) => setStatus(error.message)));
+ui["pdb-id-input"].addEventListener("keydown", (event) => {
+  if (event.key === "Enter") fetchPdb().catch((error) => setStatus(error.message));
+});
 ui["pdb-input"].addEventListener("change", () => preparePdbFile(ui["pdb-input"].files[0]).catch(() => {}));
 ui["ligand-select"].addEventListener("change", async () => {
   if (!pdbStructure) return;
@@ -300,6 +325,7 @@ window.__wsfmdock = {
   get sample() { return sample; },
   async loadSample(file) { return loadSample(file); },
   async loadPdbText(text, filename) { return preparePdb(text, filename); },
+  async fetchPdb(pdbId) { return fetchPdb(pdbId); },
   async replaceLigand(smiles) { return applySmiles(smiles); },
   async runInference() { return runInference(); },
 };

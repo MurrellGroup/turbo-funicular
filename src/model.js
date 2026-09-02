@@ -65,8 +65,8 @@ class SampleBuffers {
 }
 
 export class DockingWebGpuModel {
-  static async create(device, manifestUrl = "/assets/model/manifest.json") {
-    const manifest = await fetch(manifestUrl).then((response) => response.json());
+  static async create(device, manifestUrl = "/assets/model/manifest.json", suppliedManifest = null) {
+    const manifest = suppliedManifest ?? await fetch(manifestUrl).then((response) => response.json());
     const [weights, kernels] = await Promise.all([
       WeightStore.load(device, manifestUrl, manifest),
       Kernels.create(device, manifest.activation_precision),
