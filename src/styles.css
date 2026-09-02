@@ -110,6 +110,23 @@ button:hover:not(:disabled) { background: #72d9bf; }
 button:disabled { cursor: wait; opacity: 0.48; }
 button.secondary { margin-top: 8px; border: 1px solid #3a4242; background: transparent; color: #cfd5d2; font-weight: 600; }
 #run-icon { margin-right: 7px; }
+.toggle-row {
+  display: flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 9px;
+  margin-top: 12px;
+  cursor: pointer;
+  color: #aeb6b3;
+  font-size: 11px;
+}
+.toggle-row input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  padding: 0;
+  accent-color: #5dcab0;
+}
 
 .metrics { margin: 16px 0 0; border-top: 1px solid #303637; }
 .metrics div { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #292e2f; font: 12px/1.3 ui-monospace, monospace; }

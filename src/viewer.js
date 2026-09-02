@@ -9,6 +9,7 @@ const ELEMENT_COLORS = new Map([
   [15, 0xeea058], [16, 0xe9cf54], [17, 0x61c87b], [34, 0xb485db],
 ]);
 const ELEMENT_RADII = new Map([[6, 0.23], [7, 0.24], [8, 0.25], [9, 0.25], [15, 0.29], [16, 0.29], [17, 0.30]]);
+const BACKBONE_RADII = new Map([[6, 0.072], [7, 0.078], [8, 0.082], [16, 0.085]]);
 
 const axis = new THREE.Vector3(0, 1, 0);
 const a = new THREE.Vector3();
@@ -54,6 +55,53 @@ function material(color, opacity = 1) {
   });
 }
 
+function fullBackbonePairs(sample) {
+  if (!sample.residue_ids || !sample.atom_names) return sample.backbone_trace_pairs;
+  const residues = new Map();
+  for (let atom = 0; atom < sample.atoms; atom += 1) {
+    const residue = sample.residue_ids[atom];
+    if (residue < 0 || sample.roles[atom] !== ROLE_BACKBONE) continue;
+    if (!residues.has(residue)) residues.set(residue, new Map());
+    residues.get(residue).set(sample.atom_names[atom], atom);
+  }
+  const pairs = [];
+  const seen = new Set();
+  const add = (first, second) => {
+    if (first === undefined || second === undefined || first === second) return;
+    const key = first < second ? `${first}:${second}` : `${second}:${first}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    pairs.push([first, second]);
+  };
+  for (const atoms of residues.values()) {
+    add(atoms.get(0), atoms.get(1));
+    add(atoms.get(1), atoms.get(2));
+    add(atoms.get(2), atoms.get(3));
+    add(atoms.get(2), atoms.get(4));
+  }
+  for (const [first, second] of sample.backbone_trace_pairs) {
+    if (sample.atom_names[first] === 1 && sample.atom_names[second] === 1) {
+      const left = residues.get(sample.residue_ids[first]);
+      const right = residues.get(sample.residue_ids[second]);
+      add(left?.get(2), right?.get(0));
+    } else {
+      add(first, second);
+    }
+  }
+  return pairs;
+}
+
+function groupedAtoms(sample, role) {
+  const groups = new Map();
+  for (let atom = 0; atom < sample.atoms; atom += 1) {
+    if (sample.roles[atom] !== role) continue;
+    const element = sample.atomic_numbers[atom];
+    if (!groups.has(element)) groups.set(element, []);
+    groups.get(element).push(atom);
+  }
+  return groups;
+}
+
 export class MolecularViewer {
   constructor(container) {
     this.container = container;
@@ -77,6 +125,7 @@ export class MolecularViewer {
     this.scene.add(rim);
     this.group = null;
     this.sample = null;
+    this.referenceVisible = false;
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.animateFrame = this.animateFrame.bind(this);
@@ -100,23 +149,66 @@ export class MolecularViewer {
     this.scene.add(this.group);
     const sphere = new THREE.SphereGeometry(1, 9, 7);
     const cylinder = new THREE.CylinderGeometry(1, 1, 1, 7, 1, false);
-    this.backbone = new THREE.InstancedMesh(cylinder, material(0x65706f, 0.64), sample.backbone_trace_pairs.length);
+    this.backbonePairs = fullBackbonePairs(sample);
+    this.backbone = new THREE.InstancedMesh(cylinder, material(0x737d7b, 0.72), this.backbonePairs.length);
+    this.backboneByElement = groupedAtoms(sample, ROLE_BACKBONE);
+    this.backboneMeshes = [...this.backboneByElement].map(([element, atoms]) => ({
+      element,
+      atoms,
+      mesh: new THREE.InstancedMesh(
+        sphere,
+        material(ELEMENT_COLORS.get(element) ?? 0x929a98, 0.68),
+        atoms.length,
+      ),
+    }));
     this.sideAtoms = new THREE.InstancedMesh(sphere, material(0x52bca8, 0.84), sample.roles.filter((role) => role === ROLE_SIDECHAIN).length);
     this.sideBonds = new THREE.InstancedMesh(cylinder, material(0x3e9e8d, 0.76), sample.sidechain_bonds.length);
     this.ligandBonds = new THREE.InstancedMesh(cylinder, material(0xd65358), sample.ligand_bonds.length);
-    this.ligandByElement = new Map();
-    for (let atom = 0; atom < sample.atoms; atom += 1) {
-      if (sample.roles[atom] !== ROLE_LIGAND) continue;
-      const element = sample.atomic_numbers[atom];
-      if (!this.ligandByElement.has(element)) this.ligandByElement.set(element, []);
-      this.ligandByElement.get(element).push(atom);
-    }
+    this.ligandByElement = groupedAtoms(sample, ROLE_LIGAND);
     this.ligandMeshes = [...this.ligandByElement].map(([element, atoms]) => ({
       element,
       atoms,
       mesh: new THREE.InstancedMesh(sphere, material(ELEMENT_COLORS.get(element) ?? 0xcd83d2), atoms.length),
     }));
-    for (const mesh of [this.backbone, this.sideAtoms, this.sideBonds, this.ligandBonds, ...this.ligandMeshes.map((item) => item.mesh)]) {
+    this.referenceGroup = new THREE.Group();
+    this.referenceGroup.visible = this.referenceVisible;
+    this.referenceAtoms = sample.roles.flatMap(
+      (role, atom) => role === ROLE_SIDECHAIN || role === ROLE_LIGAND ? [atom] : [],
+    );
+    this.referenceAtomMesh = new THREE.InstancedMesh(
+      sphere,
+      material(0xf0bd68, 0.2),
+      this.referenceAtoms.length,
+    );
+    this.referencePairs = [...sample.sidechain_bonds, ...sample.ligand_bonds];
+    this.referenceBondMesh = new THREE.InstancedMesh(
+      cylinder,
+      material(0xdca85e, 0.16),
+      this.referencePairs.length,
+    );
+    for (const mesh of [this.referenceAtomMesh, this.referenceBondMesh]) {
+      mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+      mesh.frustumCulled = false;
+      this.referenceGroup.add(mesh);
+    }
+    const target = flattenCoords(sample.target_coords);
+    this.referenceAtoms.forEach((atom, index) => atomMatrix(this.referenceAtomMesh, index, target, atom, 0.105));
+    let referenceCursor = 0;
+    for (const [first, second] of this.referencePairs) {
+      if (bondMatrix(this.referenceBondMesh, referenceCursor, target, first, second, 0.027)) referenceCursor += 1;
+    }
+    this.referenceBondMesh.count = referenceCursor;
+    this.referenceAtomMesh.instanceMatrix.needsUpdate = true;
+    this.referenceBondMesh.instanceMatrix.needsUpdate = true;
+    this.group.add(this.referenceGroup);
+    for (const mesh of [
+      this.backbone,
+      ...this.backboneMeshes.map((item) => item.mesh),
+      this.sideAtoms,
+      this.sideBonds,
+      this.ligandBonds,
+      ...this.ligandMeshes.map((item) => item.mesh),
+    ]) {
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.frustumCulled = false;
       this.group.add(mesh);
@@ -129,11 +221,21 @@ export class MolecularViewer {
   update(coords) {
     if (!this.sample) return;
     let cursor = 0;
-    for (const [first, second] of this.sample.backbone_trace_pairs) {
-      if (bondMatrix(this.backbone, cursor, coords, first, second, 0.055)) cursor += 1;
+    for (const [first, second] of this.backbonePairs) {
+      if (bondMatrix(this.backbone, cursor, coords, first, second, 0.038)) cursor += 1;
     }
     this.backbone.count = cursor;
     this.backbone.instanceMatrix.needsUpdate = true;
+    for (const { element, atoms, mesh } of this.backboneMeshes) {
+      atoms.forEach((atom, index) => atomMatrix(
+        mesh,
+        index,
+        coords,
+        atom,
+        BACKBONE_RADII.get(element) ?? 0.075,
+      ));
+      mesh.instanceMatrix.needsUpdate = true;
+    }
     cursor = 0;
     for (const atom of this.sidechainAtoms) atomMatrix(this.sideAtoms, cursor++, coords, atom, 0.09);
     this.sideAtoms.count = cursor;
@@ -154,6 +256,11 @@ export class MolecularViewer {
       atoms.forEach((atom, index) => atomMatrix(mesh, index, coords, atom, ELEMENT_RADII.get(element) ?? 0.26));
       mesh.instanceMatrix.needsUpdate = true;
     }
+  }
+
+  setReferenceVisible(visible) {
+    this.referenceVisible = Boolean(visible);
+    if (this.referenceGroup) this.referenceGroup.visible = this.referenceVisible;
   }
 
   async interpolate(from, to, duration = 360) {

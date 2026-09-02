@@ -11,7 +11,7 @@ const ui = Object.fromEntries([
   "step-status", "map-time", "total-time", "memory-label", "progress-bar", "status",
   "example-tab", "custom-tab", "example-panel", "custom-panel", "pdb-input",
   "open-pdb", "ligand-select", "smiles-input", "replace-ligand", "structure-label",
-  "pdb-id-input", "fetch-pdb",
+  "pdb-id-input", "fetch-pdb", "show-reference",
 ].map((id) => [id, document.getElementById(id)]));
 
 const viewer = new MolecularViewer(document.getElementById("viewport"));
@@ -133,10 +133,10 @@ async function fetchPdb(pdbId = ui["pdb-id-input"].value) {
   setInputBusy(true);
   setStatus(`Loading ${id}.`);
   try {
-    const response = await fetch(`https://files.rcsb.org/download/${encodeURIComponent(id)}.pdb`);
+    const response = await fetch(`https://files.rcsb.org/download/${encodeURIComponent(id)}.pdb1`);
     if (!response.ok) throw new Error(`PDB ${id} could not be loaded (${response.status}).`);
     ui["pdb-id-input"].value = id;
-    return await preparePdb(await response.text(), `${id}.pdb`);
+    return await preparePdb(await response.text(), `${id}-assembly1.pdb`);
   } finally {
     setInputBusy(false);
   }
@@ -264,6 +264,9 @@ async function initialize() {
 
 ui["run-button"].addEventListener("click", runInference);
 ui["reset-camera"].addEventListener("click", () => viewer.resetCamera());
+ui["show-reference"].addEventListener("change", () => {
+  viewer.setReferenceVisible(ui["show-reference"].checked);
+});
 ui["sample-select"].addEventListener("change", () => loadSample(ui["sample-select"].value));
 ui["example-tab"].addEventListener("click", async () => {
   setSourceMode("example");
@@ -322,6 +325,7 @@ const ready = initialize().catch((error) => {
 window.__wsfmdock = {
   ready,
   get model() { return model; },
+  get viewer() { return viewer; },
   get sample() { return sample; },
   async loadSample(file) { return loadSample(file); },
   async loadPdbText(text, filename) { return preparePdb(text, filename); },

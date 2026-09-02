@@ -31,7 +31,7 @@ try {
   await page.click("#custom-tab");
   await page.fill("#pdb-id-input", "1HVR");
   await page.click("#fetch-pdb");
-  await page.waitForFunction(() => window.__wsfmdock.sample?.id === "pdb-1HVR.pdb");
+  await page.waitForFunction(() => window.__wsfmdock.sample?.id === "pdb-1HVR-assembly1.pdb");
   const fetched = await page.evaluate(() => ({
     atoms: window.__wsfmdock.sample.atoms,
     ligandAtoms: window.__wsfmdock.sample.roles.filter((role) => role === 3).length,
@@ -54,6 +54,14 @@ try {
   }));
   if (pdb.atoms !== 15 || pdb.ligandAtoms !== 6 || pdb.directedEdges !== 12) {
     throw new Error(`PDB browser preparation differs: ${JSON.stringify(pdb)}`);
+  }
+  const rendering = await page.evaluate(() => ({
+    backboneAtoms: [...window.__wsfmdock.viewer.backboneByElement.values()].flat().length,
+    backboneBonds: window.__wsfmdock.viewer.backbonePairs.length,
+    referenceAtoms: window.__wsfmdock.viewer.referenceAtoms.length,
+  }));
+  if (rendering.backboneAtoms !== 8 || rendering.backboneBonds !== 7 || rendering.referenceAtoms !== 7) {
+    throw new Error(`Full-backbone/reference rendering differs: ${JSON.stringify(rendering)}`);
   }
 
   await page.fill("#smiles-input", "CC(=O)Oc1ccccc1C(=O)O");
@@ -97,6 +105,9 @@ try {
   if (!inference.finite || inference.fixedMaximum >= 1e-6) {
     throw new Error(`Custom inference failed: ${JSON.stringify(inference)}`);
   }
+  await page.check("#show-reference");
+  const referenceVisible = await page.evaluate(() => window.__wsfmdock.viewer.referenceGroup.visible);
+  if (!referenceVisible) throw new Error("Reference pose toggle did not show the reference layer.");
   await page.screenshot({ path: "test-results-custom-input.png" });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "test-results-custom-input-mobile.png" });
@@ -116,7 +127,7 @@ try {
     throw new Error(`Mobile layout overflowed: ${JSON.stringify(mobile)}`);
   }
   if (errors.length) throw new Error(`Browser errors: ${errors.join("; ")}`);
-  console.log(JSON.stringify({ fetched, pdb, smiles, inference, mobile }, null, 2));
+  console.log(JSON.stringify({ fetched, pdb, rendering, smiles, inference, referenceVisible, mobile }, null, 2));
 } finally {
   await browser.close();
 }
