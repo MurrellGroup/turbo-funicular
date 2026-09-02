@@ -31,6 +31,19 @@ npm run dev
 
 The development server uses HTTPS because WebGPU requires a secure context.
 
+## Custom structures
+
+Use **Custom PDB** to open or drag a local `.pdb`/`.ent` file. Preparation is
+performed in the browser: the first model and primary alternate locations are
+read, water and hydrogens are removed, supported protein heavy atoms are fixed,
+and each non-water PDB component can be selected as the moving ligand.
+
+PDB ligand bonds use `CONECT` records when present and a covalent-distance
+fallback for missing edges. Raw PDB files do not always preserve authoritative
+bond orders. Entering a replacement SMILES uses RDKit WASM to supply the exact
+heavy-atom connectivity and single, double, triple, or aromatic bond category.
+The prepared inputs and checkpoint stay in the browser tab.
+
 ## Parity
 
 Generate the single-map and multi-map explicit-noise PyTorch fixtures with
@@ -40,6 +53,8 @@ browser test under an X server:
 ```bash
 xvfb-run -a npm run test:browser
 xvfb-run -a npm run test:graph
+xvfb-run -a npm run test:custom
+npm run test:prep
 ```
 
 Attention uses online softmax over 4x32 query/key tiles. Molecular bonds remain

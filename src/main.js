@@ -1,16 +1,26 @@
 import { DockingWebGpuModel } from "./model.js";
 import { MolecularViewer } from "./viewer.js";
+import { graphFromSmiles } from "./chemistry.js";
+import { parsePdb, preparePdbSample, replaceLigand } from "./prep.js";
+import { loadRdkit } from "./rdkit.js";
 
 const ui = Object.fromEntries([
   "device-dot", "device-label", "sample-select", "step-select", "seed-input",
   "run-button", "run-label", "reset-camera", "model-label", "atom-count",
   "step-status", "map-time", "total-time", "memory-label", "progress-bar", "status",
+  "example-tab", "custom-tab", "example-panel", "custom-panel", "pdb-input",
+  "open-pdb", "ligand-select", "smiles-input", "replace-ligand", "structure-label",
 ].map((id) => [id, document.getElementById(id)]));
 
 const viewer = new MolecularViewer(document.getElementById("viewport"));
 let device;
 let model;
 let sample;
+let catalog;
+let rdkit;
+let pdbStructure;
+let presetSample;
+let customSample;
 let running = false;
 
 function setStatus(message) {
@@ -21,9 +31,8 @@ function formatBytes(bytes) {
   return `${(bytes / 2 ** 20).toFixed(1)} MiB`;
 }
 
-async function loadSample(file) {
-  setStatus("Loading the selected molecular system.");
-  sample = await fetch(`/assets/samples/${file}`).then((response) => response.json());
+async function applySample(nextSample, readyStatus = "Weights are resident on the GPU. Run a stochastic trajectory.") {
+  sample = nextSample;
   await model.setSample(sample);
   const initial = model.initialize(Number(ui["seed-input"].value) || 1);
   viewer.setSample(sample, initial.coords);
@@ -33,14 +42,114 @@ async function loadSample(file) {
   ui["map-time"].textContent = "-";
   ui["total-time"].textContent = "-";
   ui["progress-bar"].style.width = "0%";
-  setStatus("Weights are resident on the GPU. Run a stochastic trajectory.");
+  setStatus(readyStatus);
+  return sample;
+}
+
+async function loadSample(file) {
+  setStatus("Loading the selected molecular system.");
+  presetSample = await fetch(`/assets/samples/${file}`).then((response) => response.json());
+  return applySample(presetSample);
+}
+
+function setSourceMode(mode) {
+  const example = mode === "example";
+  ui["example-tab"].classList.toggle("active", example);
+  ui["custom-tab"].classList.toggle("active", !example);
+  ui["example-tab"].setAttribute("aria-selected", String(example));
+  ui["custom-tab"].setAttribute("aria-selected", String(!example));
+  ui["example-panel"].hidden = !example;
+  ui["custom-panel"].hidden = example;
+}
+
+function setInputBusy(busy) {
+  for (const id of ["run-button", "sample-select", "open-pdb", "replace-ligand", "example-tab", "custom-tab"]) {
+    ui[id].disabled = busy;
+  }
+  ui["ligand-select"].disabled = busy || !pdbStructure?.ligandOptions.length;
+  ui["smiles-input"].disabled = busy;
+}
+
+function ligandOptions(structure) {
+  ui["ligand-select"].replaceChildren();
+  if (!structure.ligandOptions.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Receptor only";
+    ui["ligand-select"].append(option);
+    ui["ligand-select"].disabled = true;
+    return;
+  }
+  if (structure.ligandOptions.length > 1) {
+    const all = document.createElement("option");
+    all.value = "__all__";
+    all.textContent = `All non-water components (${structure.ligandOptions.reduce((total, item) => total + item.atoms.length, 0)})`;
+    ui["ligand-select"].append(all);
+  }
+  for (const entry of structure.ligandOptions) {
+    const option = document.createElement("option");
+    option.value = entry.id;
+    option.textContent = entry.label;
+    ui["ligand-select"].append(option);
+  }
+  ui["ligand-select"].value = structure.defaultLigandId;
+  ui["ligand-select"].disabled = false;
+}
+
+async function preparePdb(text, filename = "structure.pdb") {
+  if (running) return;
+  setInputBusy(true);
+  setStatus("Preparing the PDB in this browser tab.");
+  try {
+    pdbStructure = parsePdb(text, filename);
+    ligandOptions(pdbStructure);
+    customSample = preparePdbSample(pdbStructure, ui["ligand-select"].value || null);
+    setSourceMode("custom");
+    await applySample(
+      customSample,
+      `Prepared ${filename}. ${customSample.graph_source}.`,
+    );
+    ui["structure-label"].textContent = `${filename} / ${customSample.atoms.toLocaleString()} atoms / ${customSample.graph_source}`;
+    return customSample;
+  } catch (error) {
+    setStatus(error.message);
+    throw error;
+  } finally {
+    setInputBusy(false);
+  }
+}
+
+async function preparePdbFile(file) {
+  if (!file) return;
+  await preparePdb(await file.text(), file.name);
+}
+
+async function applySmiles(smiles = ui["smiles-input"].value) {
+  if (running || !sample) return;
+  setInputBusy(true);
+  setStatus("Resolving the replacement molecular graph with RDKit WASM.");
+  try {
+    const graph = graphFromSmiles(rdkit, smiles);
+    customSample = replaceLigand(sample, graph);
+    setSourceMode("custom");
+    await applySample(
+      customSample,
+      `Prepared ${graph.canonicalSmiles} with ${graph.atomicNumbers.length} heavy atoms and ${graph.bonds.length} bonds.`,
+    );
+    ui["structure-label"].textContent = `${graph.canonicalSmiles} / exact RDKit heavy-atom graph`;
+    return customSample;
+  } catch (error) {
+    setStatus(error.message);
+    throw error;
+  } finally {
+    setInputBusy(false);
+  }
 }
 
 async function runInference() {
   if (running) return;
   running = true;
-  ui["run-button"].disabled = true;
-  ui["sample-select"].disabled = true;
+  setInputBusy(true);
   const steps = Number(ui["step-select"].value);
   const seed = Number(ui["seed-input"].value) || 1;
   const { rng, coords: initial } = model.initialize(seed);
@@ -72,9 +181,9 @@ async function runInference() {
     setStatus(`Inference failed: ${error.message}`);
   } finally {
     running = false;
-    ui["run-button"].disabled = false;
-    ui["sample-select"].disabled = false;
+    setInputBusy(false);
   }
+  return previous;
 }
 
 async function initialize() {
@@ -106,11 +215,14 @@ async function initialize() {
   ui["device-label"].textContent = adapter.info?.description
     || `WebGPU / ${needsF16 ? "FP16" : "FP32"}`;
   setStatus("Compiling fused kernels and uploading the legacy CK checkpoint.");
-  const [catalog, loadedModel] = await Promise.all([
+  const [loadedCatalog, loadedModel, loadedRdkit] = await Promise.all([
     fetch("/assets/samples/catalog.json").then((response) => response.json()),
     DockingWebGpuModel.create(device),
+    loadRdkit(),
   ]);
+  catalog = loadedCatalog;
   model = loadedModel;
+  rdkit = loadedRdkit;
   const checkpoint = model.weights.manifest.checkpoint_sha256.slice(0, 8);
   ui["model-label"].textContent = `post-joint CK ${model.weights.manifest.iteration.toLocaleString()} / ${checkpoint}`;
   for (const entry of catalog.samples) {
@@ -124,12 +236,55 @@ async function initialize() {
   ui["run-button"].disabled = false;
   ui["sample-select"].disabled = false;
   ui["reset-camera"].disabled = false;
+  ui["open-pdb"].disabled = false;
+  ui["replace-ligand"].disabled = false;
   return { device, model, catalog };
 }
 
 ui["run-button"].addEventListener("click", runInference);
 ui["reset-camera"].addEventListener("click", () => viewer.resetCamera());
 ui["sample-select"].addEventListener("change", () => loadSample(ui["sample-select"].value));
+ui["example-tab"].addEventListener("click", async () => {
+  setSourceMode("example");
+  if (presetSample && sample !== presetSample) await applySample(presetSample);
+});
+ui["custom-tab"].addEventListener("click", async () => {
+  setSourceMode("custom");
+  if (customSample && sample !== customSample) await applySample(customSample);
+});
+ui["open-pdb"].addEventListener("click", () => ui["pdb-input"].click());
+ui["pdb-input"].addEventListener("change", () => preparePdbFile(ui["pdb-input"].files[0]).catch(() => {}));
+ui["ligand-select"].addEventListener("change", async () => {
+  if (!pdbStructure) return;
+  try {
+    customSample = preparePdbSample(pdbStructure, ui["ligand-select"].value || null);
+    await applySample(customSample, `Prepared ${pdbStructure.filename}. ${customSample.graph_source}.`);
+    ui["structure-label"].textContent = `${pdbStructure.filename} / ${customSample.atoms.toLocaleString()} atoms / ${customSample.graph_source}`;
+  } catch (error) {
+    setStatus(error.message);
+  }
+});
+ui["replace-ligand"].addEventListener("click", () => applySmiles().catch(() => {}));
+ui["smiles-input"].addEventListener("keydown", (event) => {
+  if (event.key === "Enter") applySmiles().catch(() => {});
+});
+
+for (const type of ["dragenter", "dragover"]) {
+  document.addEventListener(type, (event) => {
+    event.preventDefault();
+    document.querySelector("main").classList.add("dragging");
+  });
+}
+for (const type of ["dragleave", "drop"]) {
+  document.addEventListener(type, (event) => {
+    event.preventDefault();
+    document.querySelector("main").classList.remove("dragging");
+  });
+}
+document.addEventListener("drop", (event) => {
+  const file = [...event.dataTransfer.files].find((entry) => /\.(pdb|ent)$/i.test(entry.name));
+  if (file) preparePdbFile(file).catch(() => {});
+});
 
 const ready = initialize().catch((error) => {
   console.error(error);
@@ -144,4 +299,7 @@ window.__wsfmdock = {
   get model() { return model; },
   get sample() { return sample; },
   async loadSample(file) { return loadSample(file); },
+  async loadPdbText(text, filename) { return preparePdb(text, filename); },
+  async replaceLigand(smiles) { return applySmiles(smiles); },
+  async runInference() { return runInference(); },
 };

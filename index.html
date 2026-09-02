@@ -21,10 +21,32 @@
         </div>
       </header>
       <aside class="controls">
-        <label>
-          Pocket
-          <select id="sample-select" disabled></select>
-        </label>
+        <div class="source-tabs" role="tablist" aria-label="Input source">
+          <button id="example-tab" class="active" type="button" role="tab" aria-selected="true">Examples</button>
+          <button id="custom-tab" type="button" role="tab" aria-selected="false">Custom PDB</button>
+        </div>
+        <section id="example-panel" class="source-panel" role="tabpanel">
+          <label>
+            Pocket
+            <select id="sample-select" disabled></select>
+          </label>
+        </section>
+        <section id="custom-panel" class="source-panel" role="tabpanel" hidden>
+          <input id="pdb-input" type="file" accept=".pdb,.ent,chemical/x-pdb" hidden />
+          <button id="open-pdb" class="secondary source-command" type="button" disabled>Open PDB</button>
+          <label>
+            PDB ligand
+            <select id="ligand-select" disabled>
+              <option>No PDB loaded</option>
+            </select>
+          </label>
+          <label>
+            Replacement SMILES
+            <input id="smiles-input" type="text" value="CC(=O)Oc1ccccc1C(=O)O" spellcheck="false" autocomplete="off" />
+          </label>
+          <button id="replace-ligand" class="secondary source-command" type="button" disabled>Replace ligand</button>
+          <p id="structure-label" class="structure-label">No custom structure loaded</p>
+        </section>
         <div class="field-row">
           <label>
             Steps

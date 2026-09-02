@@ -6,10 +6,13 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
+    "test:prep": "node --test tests/prep.mjs",
     "test:browser": "node tests/parity.mjs",
+    "test:custom": "node tests/custom_input.mjs",
     "test:graph": "node tests/graph_sensitivity.mjs"
   },
   "dependencies": {
+    "@rdkit/rdkit": "^2025.3.4-1.0.0",
     "@vitejs/plugin-basic-ssl": "^2.1.0",
     "three": "^0.180.0",
     "vite": "^7.1.3"

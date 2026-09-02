@@ -6,6 +6,7 @@ import {
   readF32,
   uploadBuffer,
 } from "./gpu.js";
+import { validateSample } from "./sample.js";
 
 const STORAGE = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
 const groups = (items, width = 256) => [Math.ceil(items / width)];
@@ -80,6 +81,17 @@ export class DockingWebGpuModel {
     this.config = weights.manifest.config;
     this.float16 = weights.manifest.activation_precision === "float16";
     this.elementBytes = this.float16 ? 2 : 4;
+    const largestPerAtomBuffer = Math.max(
+      2016,
+      3 * this.config.heads * 64,
+      this.config.heads * 74,
+      2 * this.config.ff_hidden_dim,
+    ) * this.elementBytes;
+    const bufferLimit = Math.min(
+      device.limits.maxStorageBufferBindingSize,
+      device.limits.maxBufferSize,
+    );
+    this.maximumAtoms = Math.floor(bufferLimit / largestPerAtomBuffer);
     this.sampleBuffers = null;
     this.buffers = null;
     this.currentCoords = null;
@@ -104,6 +116,7 @@ export class DockingWebGpuModel {
   }
 
   async setSample(sample) {
+    validateSample(sample, this.maximumAtoms);
     if (this.sampleBuffers) this.sampleBuffers.destroy();
     if (this.buffers) {
       for (const buffer of Object.values(this.buffers).flatMap((value) => Array.isArray(value) ? value : [value])) {
