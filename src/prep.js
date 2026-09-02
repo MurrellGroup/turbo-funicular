@@ -70,6 +70,21 @@ function subtract(point, center) {
   return point.map((value, axis) => value - center[axis]);
 }
 
+function atomLocator({ atomName, rawResidue, chain, residueNumber, insertion }) {
+  return `${atomName}|${rawResidue}|${chain}|${residueNumber}|${insertion}`;
+}
+
+function parseLinkAtom(line, second = false) {
+  const offset = second ? 30 : 0;
+  return {
+    atomName: line.slice(12 + offset, 16 + offset).trim().toUpperCase(),
+    rawResidue: line.slice(17 + offset, 20 + offset).trim().toUpperCase(),
+    chain: line.slice(21 + offset, 22 + offset).trim(),
+    residueNumber: Number.parseInt(line.slice(22 + offset, 26 + offset), 10),
+    insertion: line.slice(26 + offset, 27 + offset).trim(),
+  };
+}
+
 export function parsePdb(text, filename = "structure.pdb") {
   const lines = text.replaceAll("\r", "").split("\n");
   const atoms = [];
@@ -145,12 +160,18 @@ export function parsePdb(text, filename = "structure.pdb") {
       directedConnections.set(key, (directedConnections.get(key) ?? 0) + 1);
     }
   }
+  const links = lines
+    .filter((line) => line.startsWith("LINK  "))
+    .map((line) => [parseLinkAtom(line), parseLinkAtom(line, true)])
+    .filter(([first, second]) => first.atomName && second.atomName
+      && Number.isInteger(first.residueNumber) && Number.isInteger(second.residueNumber));
   return {
     filename,
     title: title || filename,
     proteinAtoms,
     ligandOptions,
     directedConnections,
+    links,
     defaultLigandId: ligandOptions[0]?.id ?? null,
   };
 }
@@ -173,21 +194,6 @@ function prepareProtein(atoms) {
   }
   if (!prepared.length) throw new Error("PDB contains no usable protein residues.");
   return prepared;
-}
-
-function inferredLigandBonds(atoms, explicit) {
-  const result = new Map(explicit);
-  for (let left = 0; left < atoms.length; left += 1) {
-    for (let right = left + 1; right < atoms.length; right += 1) {
-      const key = `${left}:${right}`;
-      if (result.has(key)) continue;
-      const radius = (COVALENT_RADII.get(atoms[left].atomicNumber) ?? 0.85)
-        + (COVALENT_RADII.get(atoms[right].atomicNumber) ?? 0.85);
-      const separation = distance(atoms[left].coord, atoms[right].coord);
-      if (separation > 0.55 && separation <= 1.22 * radius) result.set(key, 0);
-    }
-  }
-  return result;
 }
 
 function displayTopology(coords, atomicNumbers, roles, residueIds, chainIds, atomNames, bonds) {
@@ -270,15 +276,60 @@ function assembleSample({
   };
 }
 
-function selectedLigandAtoms(structure, ligandId) {
-  if (!ligandId) return [];
-  if (ligandId === "__all__") return structure.ligandOptions.flatMap((option) => option.atoms);
-  return structure.ligandOptions.find((option) => option.id === ligandId)?.atoms ?? [];
+export class GraphUnavailableError extends Error {
+  constructor(componentId, detail = "") {
+    super(`No authoritative graph is available for ${componentId}.${detail ? ` ${detail}` : ""} Enter a replacement SMILES.`);
+    this.name = "GraphUnavailableError";
+  }
 }
 
-export function preparePdbSample(structure, ligandId = structure.defaultLigandId) {
+function selectedLigandOptions(structure, ligandId) {
+  if (!ligandId) return [];
+  if (ligandId === "__all__") return structure.ligandOptions;
+  const option = structure.ligandOptions.find((value) => value.id === ligandId);
+  return option ? [option] : [];
+}
+
+function ccdLigandBonds(options, ligand, componentGraphs) {
+  const ligandIndex = new Map(ligand.map((atom, index) => [atom.serial, index]));
+  const bonds = new Map();
+  for (const option of options) {
+    const componentId = option.atoms[0].rawResidue;
+    const graph = componentGraphs.get(componentId);
+    if (!graph) throw new GraphUnavailableError(componentId, "Its RCSB CCD definition could not be loaded.");
+    const definitionAtoms = new Map(graph.atoms.map((atom) => [atom.name, atom]));
+    const optionAtoms = new Map();
+    for (const atom of option.atoms) {
+      const definition = definitionAtoms.get(atom.atomName);
+      if (!definition) throw new GraphUnavailableError(componentId, `Atom ${atom.atomName} is absent from its CCD definition.`);
+      const expectedElement = ELEMENT_NUMBER.get(definition.element);
+      if (expectedElement !== atom.atomicNumber) {
+        throw new GraphUnavailableError(componentId, `Atom ${atom.atomName} has an element mismatch.`);
+      }
+      if (optionAtoms.has(atom.atomName)) {
+        throw new GraphUnavailableError(componentId, `Atom name ${atom.atomName} is not unique.`);
+      }
+      optionAtoms.set(atom.atomName, ligandIndex.get(atom.serial));
+    }
+    for (const bond of graph.bonds) {
+      const left = optionAtoms.get(bond.first);
+      const right = optionAtoms.get(bond.second);
+      if (left === undefined || right === undefined) continue;
+      const key = left < right ? `${left}:${right}` : `${right}:${left}`;
+      bonds.set(key, bond.type);
+    }
+  }
+  return bonds;
+}
+
+export function preparePdbSample(
+  structure,
+  ligandId = structure.defaultLigandId,
+  componentGraphs = new Map(),
+) {
   const protein = prepareProtein(structure.proteinAtoms);
-  const ligand = selectedLigandAtoms(structure, ligandId);
+  const selectedOptions = selectedLigandOptions(structure, ligandId);
+  const ligand = selectedOptions.flatMap((option) => option.atoms);
   const center = meanCoordinate(protein);
   const coords = protein.map((atom) => subtract(atom.coord, center));
   const baseMeans = protein.map((atom) => subtract(atom.anchor, center));
@@ -296,37 +347,42 @@ export function preparePdbSample(structure, ligandId = structure.defaultLigandId
   const proteinSerials = new Map(protein.map((atom, index) => [atom.serial, index]));
   const ligandOffset = protein.length;
   const ligandSerials = new Map(ligand.map((atom, index) => [atom.serial, ligandOffset + index]));
-  const explicit = new Map();
-  for (let left = 0; left < ligand.length; left += 1) {
-    for (let right = left + 1; right < ligand.length; right += 1) {
-      const first = ligand[left].serial;
-      const second = ligand[right].serial;
-      const multiplicity = Math.max(
-        structure.directedConnections.get(`${first}:${second}`) ?? 0,
-        structure.directedConnections.get(`${second}:${first}`) ?? 0,
-      );
-      if (multiplicity) explicit.set(`${left}:${right}`, Math.min(multiplicity, 3) - 1);
-    }
-  }
-  const ligandGraph = inferredLigandBonds(ligand, explicit);
+  const ligandGraph = ccdLigandBonds(selectedOptions, ligand, componentGraphs);
   const ligandBonds = [...ligandGraph].map(([key, type]) => {
     const [left, right] = key.split(":").map(Number);
     return { left: ligandOffset + left, right: ligandOffset + right, type };
   });
-  const attachmentBonds = [];
+  const attachmentBonds = new Map();
   for (const [ligandSerial, ligandIndex] of ligandSerials) {
     for (const [proteinSerial, proteinIndex] of proteinSerials) {
       const multiplicity = Math.max(
         structure.directedConnections.get(`${ligandSerial}:${proteinSerial}`) ?? 0,
         structure.directedConnections.get(`${proteinSerial}:${ligandSerial}`) ?? 0,
       );
-      if (multiplicity) attachmentBonds.push({
-        left: proteinIndex,
-        right: ligandIndex,
-        type: Math.min(multiplicity, 3) - 1,
-      });
+      if (multiplicity) {
+        const key = proteinIndex < ligandIndex
+          ? `${proteinIndex}:${ligandIndex}`
+          : `${ligandIndex}:${proteinIndex}`;
+        attachmentBonds.set(key, Math.min(multiplicity, 3) - 1);
+      }
     }
   }
+  const locatedAtoms = new Map([
+    ...protein.map((atom, index) => [atomLocator(atom), index]),
+    ...ligand.map((atom, index) => [atomLocator(atom), ligandOffset + index]),
+  ]);
+  for (const [first, second] of structure.links) {
+    const left = locatedAtoms.get(atomLocator(first));
+    const right = locatedAtoms.get(atomLocator(second));
+    if (left === undefined || right === undefined) continue;
+    if (left < ligandOffset && right < ligandOffset) continue;
+    const key = left < right ? `${left}:${right}` : `${right}:${left}`;
+    attachmentBonds.set(key, 0);
+  }
+  const attachments = [...attachmentBonds].map(([key, type]) => {
+    const [left, right] = key.split(":").map(Number);
+    return { left, right, type };
+  });
   const localBonds = ligandBonds.map(({ left, right, type }) => ({
     left: left - ligandOffset, right: right - ligandOffset, type,
   }));
@@ -357,8 +413,10 @@ export function preparePdbSample(structure, ligandId = structure.defaultLigandId
     entityIds,
     residueIds,
     chainIds,
-    bonds: [...ligandBonds, ...attachmentBonds],
-    graphSource: explicit.size ? "PDB CONECT plus inferred connectivity" : "distance-inferred PDB connectivity",
+    bonds: [...ligandBonds, ...attachments],
+    graphSource: ligand.length
+      ? `RCSB CCD connectivity${attachments.length ? " plus explicit PDB links" : ""}`
+      : "receptor only",
   });
 }
 

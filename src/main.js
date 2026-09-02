@@ -1,8 +1,9 @@
 import { DockingWebGpuModel } from "./model.js";
 import { MolecularViewer } from "./viewer.js";
 import { graphFromSmiles } from "./chemistry.js";
+import { loadCcdGraphs } from "./ccd.js";
 import { assetUrl, MODEL_MANIFEST_URL } from "./config.js";
-import { parsePdb, preparePdbSample, replaceLigand } from "./prep.js";
+import { GraphUnavailableError, parsePdb, preparePdbSample, replaceLigand } from "./prep.js";
 import { loadRdkit } from "./rdkit.js";
 
 const ui = Object.fromEntries([
@@ -99,6 +100,30 @@ function ligandOptions(structure) {
   ui["ligand-select"].disabled = false;
 }
 
+async function preparedPdbSelection(structure, ligandId) {
+  const options = ligandId === "__all__"
+    ? structure.ligandOptions
+    : structure.ligandOptions.filter((option) => option.id === ligandId);
+  const componentIds = options.map((option) => option.atoms[0].rawResidue);
+  const componentGraphs = await loadCcdGraphs(componentIds);
+  return preparePdbSample(structure, ligandId, componentGraphs);
+}
+
+async function applyPdbSelection(structure, ligandId) {
+  try {
+    customSample = await preparedPdbSelection(structure, ligandId);
+    await applySample(customSample, `Prepared ${structure.filename}. ${customSample.graph_source}.`);
+    ui["structure-label"].textContent = `${structure.filename} / ${customSample.atoms.toLocaleString()} atoms / ${customSample.graph_source}`;
+    return customSample;
+  } catch (error) {
+    if (!(error instanceof GraphUnavailableError)) throw error;
+    customSample = preparePdbSample(structure, null);
+    await applySample(customSample, error.message);
+    ui["structure-label"].textContent = `${structure.filename} / receptor only / replacement SMILES required`;
+    return customSample;
+  }
+}
+
 async function preparePdb(text, filename = "structure.pdb") {
   if (running) return;
   setInputBusy(true);
@@ -106,14 +131,8 @@ async function preparePdb(text, filename = "structure.pdb") {
   try {
     pdbStructure = parsePdb(text, filename);
     ligandOptions(pdbStructure);
-    customSample = preparePdbSample(pdbStructure, ui["ligand-select"].value || null);
     setSourceMode("custom");
-    await applySample(
-      customSample,
-      `Prepared ${filename}. ${customSample.graph_source}.`,
-    );
-    ui["structure-label"].textContent = `${filename} / ${customSample.atoms.toLocaleString()} atoms / ${customSample.graph_source}`;
-    return customSample;
+    return await applyPdbSelection(pdbStructure, ui["ligand-select"].value || null);
   } catch (error) {
     setStatus(error.message);
     throw error;
@@ -284,12 +303,13 @@ ui["pdb-id-input"].addEventListener("keydown", (event) => {
 ui["pdb-input"].addEventListener("change", () => preparePdbFile(ui["pdb-input"].files[0]).catch(() => {}));
 ui["ligand-select"].addEventListener("change", async () => {
   if (!pdbStructure) return;
+  setInputBusy(true);
   try {
-    customSample = preparePdbSample(pdbStructure, ui["ligand-select"].value || null);
-    await applySample(customSample, `Prepared ${pdbStructure.filename}. ${customSample.graph_source}.`);
-    ui["structure-label"].textContent = `${pdbStructure.filename} / ${customSample.atoms.toLocaleString()} atoms / ${customSample.graph_source}`;
+    await applyPdbSelection(pdbStructure, ui["ligand-select"].value || null);
   } catch (error) {
     setStatus(error.message);
+  } finally {
+    setInputBusy(false);
   }
 });
 ui["replace-ligand"].addEventListener("click", () => applySmiles().catch(() => {}));

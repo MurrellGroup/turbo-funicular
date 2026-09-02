@@ -2,7 +2,25 @@ function atomLine(record, serial, name, residue, chain, residueNumber, x, y, z, 
   return `${record.padEnd(6)}${String(serial).padStart(5)} ${name.padStart(4)} ${residue.padStart(3)} ${chain}${String(residueNumber).padStart(4)}    ${x.toFixed(3).padStart(8)}${y.toFixed(3).padStart(8)}${z.toFixed(3).padStart(8)}  1.00 20.00          ${element.padStart(2)}`;
 }
 
-export function miniPdb() {
+function linkLine(first, second) {
+  const line = Array(80).fill(" ");
+  const write = (offset, width, value, alignRight = false) => {
+    const text = String(value)[alignRight ? "padStart" : "padEnd"](width).slice(0, width);
+    for (let index = 0; index < width; index += 1) line[offset + index] = text[index];
+  };
+  write(0, 6, "LINK");
+  write(12, 4, first.atom, true);
+  write(17, 3, first.residue, true);
+  write(21, 1, first.chain);
+  write(22, 4, first.number, true);
+  write(42, 4, second.atom, true);
+  write(47, 3, second.residue, true);
+  write(51, 1, second.chain);
+  write(52, 4, second.number, true);
+  return line.join("").trimEnd();
+}
+
+export function miniPdb({ component = "BEN", includeLink = false } = {}) {
   const lines = [
     "TITLE     BROWSER PREPARATION FIXTURE",
     atomLine("ATOM", 1, "N", "ALA", "A", 1, -3.0, 0.0, 0.0, "N"),
@@ -19,8 +37,14 @@ export function miniPdb() {
   for (let index = 0; index < 6; index += 1) {
     const angle = index * Math.PI / 3;
     lines.push(atomLine(
-      "HETATM", 10 + index, `C${index + 1}`, "BEN", "B", 101,
+      "HETATM", 10 + index, `C${index + 1}`, component, "B", 101,
       radius * Math.cos(angle), radius * Math.sin(angle), 2.0, "C",
+    ));
+  }
+  if (includeLink) {
+    lines.push(linkLine(
+      { atom: "CB", residue: "ALA", chain: "A", number: 1 },
+      { atom: "C1", residue: component, chain: "B", number: 101 },
     ));
   }
   lines.push(
@@ -33,4 +57,34 @@ export function miniPdb() {
     "END",
   );
   return `${lines.join("\n")}\n`;
+}
+
+export function miniCcd() {
+  return `data_BEN
+#
+loop_
+_chem_comp_atom.comp_id
+_chem_comp_atom.atom_id
+_chem_comp_atom.type_symbol
+BEN C1 C
+BEN C2 C
+BEN C3 C
+BEN C4 C
+BEN C5 C
+BEN C6 C
+#
+loop_
+_chem_comp_bond.comp_id
+_chem_comp_bond.atom_id_1
+_chem_comp_bond.atom_id_2
+_chem_comp_bond.value_order
+_chem_comp_bond.pdbx_aromatic_flag
+BEN C1 C2 DOUB Y
+BEN C2 C3 SING Y
+BEN C3 C4 DOUB Y
+BEN C4 C5 SING Y
+BEN C5 C6 DOUB Y
+BEN C6 C1 SING Y
+#
+`;
 }

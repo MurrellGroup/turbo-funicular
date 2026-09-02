@@ -29,14 +29,21 @@ try {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
   await page.evaluate(() => window.__wsfmdock.ready);
   await page.click("#custom-tab");
-  await page.fill("#pdb-id-input", "1HVR");
+  await page.fill("#pdb-id-input", "8BO9");
   await page.click("#fetch-pdb");
-  await page.waitForFunction(() => window.__wsfmdock.sample?.id === "pdb-1HVR-assembly1.pdb");
+  await page.waitForFunction(() => window.__wsfmdock.sample?.id === "pdb-8BO9-assembly1.pdb");
   const fetched = await page.evaluate(() => ({
     atoms: window.__wsfmdock.sample.atoms,
     ligandAtoms: window.__wsfmdock.sample.roles.filter((role) => role === 3).length,
+    directedEdges: window.__wsfmdock.sample.neighbors.filter(([atom]) => atom >= 0).length,
+    aromaticEdges: window.__wsfmdock.sample.neighbors.filter(([, type]) => type === 3).length,
+    graphSource: window.__wsfmdock.sample.graph_source,
   }));
-  if (fetched.atoms !== 1546 || fetched.ligandAtoms !== 46) {
+  if (fetched.atoms !== 1402
+    || fetched.ligandAtoms !== 32
+    || fetched.directedEdges !== 72
+    || fetched.aromaticEdges === 0
+    || fetched.graphSource !== "RCSB CCD connectivity") {
     throw new Error(`PDB-ID preparation differs: ${JSON.stringify(fetched)}`);
   }
 
@@ -52,9 +59,32 @@ try {
     directedEdges: window.__wsfmdock.sample.neighbors.filter(([atom]) => atom >= 0).length,
     graphSource: window.__wsfmdock.sample.graph_source,
   }));
-  if (pdb.atoms !== 15 || pdb.ligandAtoms !== 6 || pdb.directedEdges !== 12) {
+  if (pdb.atoms !== 15
+    || pdb.ligandAtoms !== 6
+    || pdb.directedEdges !== 12
+    || pdb.graphSource !== "RCSB CCD connectivity") {
     throw new Error(`PDB browser preparation differs: ${JSON.stringify(pdb)}`);
   }
+
+  await page.evaluate(async (pdbText) => {
+    await window.__wsfmdock.loadPdbText(pdbText, "unknown.pdb");
+  }, miniPdb({ component: "@@@" }));
+  await page.waitForFunction(() => window.__wsfmdock.sample?.id === "pdb-unknown.pdb");
+  const unavailable = await page.evaluate(() => ({
+    atoms: window.__wsfmdock.sample.atoms,
+    ligandAtoms: window.__wsfmdock.sample.roles.filter((role) => role === 3).length,
+    status: document.getElementById("status").textContent,
+  }));
+  if (unavailable.atoms !== 9
+    || unavailable.ligandAtoms !== 0
+    || !unavailable.status.includes("replacement SMILES")) {
+    throw new Error(`Unavailable-graph fallback differs: ${JSON.stringify(unavailable)}`);
+  }
+
+  await page.evaluate(async (pdbText) => {
+    await window.__wsfmdock.loadPdbText(pdbText, "mini.pdb");
+  }, miniPdb());
+  await page.waitForFunction(() => window.__wsfmdock.sample?.id === "pdb-mini.pdb");
   const rendering = await page.evaluate(() => ({
     backboneAtoms: [...window.__wsfmdock.viewer.backboneByElement.values()].flat().length,
     backboneBonds: window.__wsfmdock.viewer.backbonePairs.length,
@@ -127,7 +157,9 @@ try {
     throw new Error(`Mobile layout overflowed: ${JSON.stringify(mobile)}`);
   }
   if (errors.length) throw new Error(`Browser errors: ${errors.join("; ")}`);
-  console.log(JSON.stringify({ fetched, pdb, rendering, smiles, inference, referenceVisible, mobile }, null, 2));
+  console.log(JSON.stringify({
+    fetched, pdb, unavailable, rendering, smiles, inference, referenceVisible, mobile,
+  }, null, 2));
 } finally {
   await browser.close();
 }
