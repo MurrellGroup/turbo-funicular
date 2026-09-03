@@ -27,8 +27,10 @@ try {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
   await page.evaluate(() => window.__wsfmdock.ready);
   const result = await page.evaluate(async () => {
-    const fixture = await fetch("/assets/parity/transition.json").then((response) => response.json());
-    const trajectory = await fetch("/assets/parity/trajectory.json").then((response) => response.json());
+    const fixture = await fetch(new URL("assets/parity/transition.json", location.href))
+      .then((response) => response.json());
+    const trajectory = await fetch(new URL("assets/parity/trajectory.json", location.href))
+      .then((response) => response.json());
     const model = window.__wsfmdock.model;
     const sample = window.__wsfmdock.sample;
     const metrics = (actual, expected, movingOnly) => {
