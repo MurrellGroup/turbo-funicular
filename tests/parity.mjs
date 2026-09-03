@@ -1,4 +1,14 @@
 import { chromium } from "playwright";
+import { readFile } from "node:fs/promises";
+
+const fixture = JSON.parse(await readFile(
+  new URL("../public/assets/parity/transition.json", import.meta.url),
+  "utf8",
+));
+const trajectory = JSON.parse(await readFile(
+  new URL("../public/assets/parity/trajectory.json", import.meta.url),
+  "utf8",
+));
 
 const executablePath = process.env.CHROME_PATH
   ?? "/home/murrellb/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome";
@@ -26,11 +36,7 @@ try {
   ));
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
   await page.evaluate(() => window.__wsfmdock.ready);
-  const result = await page.evaluate(async () => {
-    const fixture = await fetch(new URL("assets/parity/transition.json", location.href))
-      .then((response) => response.json());
-    const trajectory = await fetch(new URL("assets/parity/trajectory.json", location.href))
-      .then((response) => response.json());
+  const result = await page.evaluate(async ({ fixture, trajectory }) => {
     const model = window.__wsfmdock.model;
     const sample = window.__wsfmdock.sample;
     const metrics = (actual, expected, movingOnly) => {
@@ -84,7 +90,7 @@ try {
       movingSecant: metrics(secant, fixture.expected_secant, true),
       trajectory: trajectoryMetrics,
     };
-  });
+  }, { fixture, trajectory });
   if (errors.length) throw new Error(`Browser errors: ${errors.join("; ")}`);
   if (result.movingCoordinates.rms >= 1e-4) {
     throw new Error(`Coordinate RMS parity failed: ${result.movingCoordinates.rms}`);
