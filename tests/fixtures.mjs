@@ -86,5 +86,13 @@ BEN C4 C5 SING Y
 BEN C5 C6 DOUB Y
 BEN C6 C1 SING Y
 #
+loop_
+_pdbx_chem_comp_descriptor.comp_id
+_pdbx_chem_comp_descriptor.type
+_pdbx_chem_comp_descriptor.program
+_pdbx_chem_comp_descriptor.program_version
+_pdbx_chem_comp_descriptor.descriptor
+BEN SMILES_CANONICAL RDKit 2026.03.5 c1ccccc1
+#
 `;
 }

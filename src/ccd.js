@@ -1,5 +1,20 @@
+import { graphFromSmiles } from "./chemistry.js";
+
 const CCD_ROOT = "https://files.rcsb.org/ligands/download/";
 const ORDER = new Map([["SING", 0], ["DOUB", 1], ["TRIP", 2]]);
+const ELEMENTS = [
+  "", "H", "HE", "LI", "BE", "B", "C", "N", "O", "F", "NE", "NA", "MG",
+  "AL", "SI", "P", "S", "CL", "AR", "K", "CA", "SC", "TI", "V", "CR",
+  "MN", "FE", "CO", "NI", "CU", "ZN", "GA", "GE", "AS", "SE", "BR", "KR",
+  "RB", "SR", "Y", "ZR", "NB", "MO", "TC", "RU", "RH", "PD", "AG", "CD",
+  "IN", "SN", "SB", "TE", "I", "XE", "CS", "BA", "LA", "CE", "PR", "ND",
+  "PM", "SM", "EU", "GD", "TB", "DY", "HO", "ER", "TM", "YB", "LU", "HF",
+  "TA", "W", "RE", "OS", "IR", "PT", "AU", "HG", "TL", "PB", "BI", "PO",
+  "AT", "RN", "FR", "RA", "AC", "TH", "PA", "U", "NP", "PU", "AM", "CM",
+  "BK", "CF", "ES", "FM", "MD", "NO", "LR", "RF", "DB", "SG", "BH", "HS",
+  "MT", "DS", "RG", "CN", "NH", "FL", "MC", "LV", "TS", "OG",
+];
+const ELEMENT_NUMBER = new Map(ELEMENTS.map((symbol, index) => [symbol, index]));
 const cache = new Map();
 
 function tokenizeCif(text) {
@@ -94,6 +109,7 @@ export function parseCcdGraph(text, requestedId) {
   const componentId = requestedId.trim().toUpperCase();
   let atoms;
   let bonds;
+  const smiles = [];
   for (const loop of cifLoops(text)) {
     if (loop.headers.includes("_chem_comp_atom.atom_id")) {
       const idColumn = column(loop, "_chem_comp_atom.comp_id");
@@ -123,9 +139,135 @@ export function parseCcdGraph(text, requestedId) {
           };
         });
     }
+    if (loop.headers.includes("_pdbx_chem_comp_descriptor.descriptor")) {
+      const idColumn = column(loop, "_pdbx_chem_comp_descriptor.comp_id");
+      const typeColumn = column(loop, "_pdbx_chem_comp_descriptor.type");
+      const programColumn = column(loop, "_pdbx_chem_comp_descriptor.program");
+      const descriptorColumn = column(loop, "_pdbx_chem_comp_descriptor.descriptor");
+      for (const row of loop.rows) {
+        if (row[idColumn].toUpperCase() !== componentId) continue;
+        const type = row[typeColumn].toUpperCase();
+        if (type !== "SMILES_CANONICAL" && type !== "SMILES") continue;
+        smiles.push({
+          value: row[descriptorColumn],
+          canonical: type === "SMILES_CANONICAL",
+          program: row[programColumn].toUpperCase(),
+        });
+      }
+    }
   }
-  if (!atoms?.length || !bonds) throw new Error(`CCD ${componentId} has no complete atom/bond definition.`);
-  return { componentId, atoms, bonds };
+  if (!atoms?.length || !bonds || !smiles.length) {
+    throw new Error(`CCD ${componentId} has no complete atom/bond/SMILES definition.`);
+  }
+  smiles.sort((left, right) => (
+    Number(right.canonical) - Number(left.canonical)
+    || Number(right.program === "CACTVS") - Number(left.program === "CACTVS")
+  ));
+  return { componentId, atoms, bonds, smiles: smiles.map((entry) => entry.value) };
+}
+
+function adjacency(atoms, bonds) {
+  const result = Array.from({ length: atoms }, () => new Set());
+  for (const { left, right } of bonds) {
+    result[left].add(right);
+    result[right].add(left);
+  }
+  return result;
+}
+
+function atomSignature(atom, atomicNumbers, graph) {
+  const neighbors = [...graph[atom]].map((index) => atomicNumbers[index]).sort((a, b) => a - b);
+  return `${atomicNumbers[atom]}|${neighbors.join(",")}`;
+}
+
+function graphCorrespondence(sourceNumbers, sourceBonds, targetNumbers, targetBonds) {
+  if (sourceNumbers.length !== targetNumbers.length || sourceBonds.length !== targetBonds.length) {
+    throw new Error("CCD SMILES and atom-name graphs differ in size.");
+  }
+  const sourceGraph = adjacency(sourceNumbers.length, sourceBonds);
+  const targetGraph = adjacency(targetNumbers.length, targetBonds);
+  const targetBySignature = new Map();
+  for (let atom = 0; atom < targetNumbers.length; atom += 1) {
+    const signature = atomSignature(atom, targetNumbers, targetGraph);
+    if (!targetBySignature.has(signature)) targetBySignature.set(signature, []);
+    targetBySignature.get(signature).push(atom);
+  }
+  const candidates = sourceNumbers.map((_, atom) => (
+    targetBySignature.get(atomSignature(atom, sourceNumbers, sourceGraph)) ?? []
+  ));
+  if (candidates.some((values) => !values.length)) {
+    throw new Error("CCD SMILES cannot be matched to its atom-name graph.");
+  }
+  const mapping = new Int32Array(sourceNumbers.length).fill(-1);
+  const used = new Uint8Array(targetNumbers.length);
+  const compatible = (source, target) => {
+    for (let other = 0; other < mapping.length; other += 1) {
+      if (mapping[other] < 0) continue;
+      if (sourceGraph[source].has(other) !== targetGraph[target].has(mapping[other])) return false;
+    }
+    return true;
+  };
+  const visit = (assigned) => {
+    if (assigned === mapping.length) return true;
+    let source = -1;
+    let options = [];
+    for (let atom = 0; atom < mapping.length; atom += 1) {
+      if (mapping[atom] >= 0) continue;
+      const available = candidates[atom].filter((target) => !used[target] && compatible(atom, target));
+      if (!available.length) return false;
+      if (source < 0 || available.length < options.length) {
+        source = atom;
+        options = available;
+      }
+    }
+    for (const target of options) {
+      mapping[source] = target;
+      used[target] = 1;
+      if (visit(assigned + 1)) return true;
+      mapping[source] = -1;
+      used[target] = 0;
+    }
+    return false;
+  };
+  if (!visit(0)) throw new Error("CCD SMILES and atom-name graphs are not isomorphic.");
+  return [...mapping];
+}
+
+export function trainingGraphFromCcd(rdkit, ccd) {
+  let graph;
+  let lastError;
+  for (const smiles of ccd.smiles) {
+    try {
+      graph = graphFromSmiles(rdkit, smiles);
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!graph) throw lastError ?? new Error(`CCD ${ccd.componentId} has no RDKit-compatible SMILES.`);
+  const heavyAtoms = ccd.atoms.filter((atom) => !["H", "D", "T"].includes(atom.element));
+  const nameToIndex = new Map(heavyAtoms.map((atom, index) => [atom.name, index]));
+  const rawBonds = ccd.bonds.flatMap((bond) => {
+    const left = nameToIndex.get(bond.first);
+    const right = nameToIndex.get(bond.second);
+    return left === undefined || right === undefined ? [] : [{ left, right }];
+  });
+  const targetNumbers = heavyAtoms.map((atom) => ELEMENT_NUMBER.get(atom.element) ?? 0);
+  if (targetNumbers.some((value) => value <= 1)) {
+    throw new Error(`CCD ${ccd.componentId} contains an unsupported heavy element.`);
+  }
+  const mapping = graphCorrespondence(graph.atomicNumbers, graph.bonds, targetNumbers, rawBonds);
+  const atoms = mapping.map((index) => ({ ...heavyAtoms[index], atomicNumber: targetNumbers[index] }));
+  return {
+    componentId: ccd.componentId,
+    atoms,
+    bonds: graph.bonds.map(({ left, right, type }) => ({
+      first: atoms[left].name,
+      second: atoms[right].name,
+      type,
+    })),
+    canonicalSmiles: graph.canonicalSmiles,
+  };
 }
 
 async function fetchCcdGraph(componentId) {
@@ -136,12 +278,12 @@ async function fetchCcdGraph(componentId) {
   return parseCcdGraph(await response.text(), id);
 }
 
-export async function loadCcdGraphs(componentIds) {
+export async function loadCcdGraphs(componentIds, rdkit) {
   const ids = [...new Set(componentIds.map((value) => value.trim().toUpperCase()))];
   const entries = await Promise.all(ids.map(async (id) => {
     if (!cache.has(id)) cache.set(id, fetchCcdGraph(id));
     try {
-      return [id, await cache.get(id)];
+      return [id, trainingGraphFromCcd(rdkit, await cache.get(id))];
     } catch {
       cache.delete(id);
       return [id, null];

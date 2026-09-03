@@ -1,5 +1,5 @@
-import initRDKitModule from "@rdkit/rdkit";
-import rdkitWasmUrl from "@rdkit/rdkit/dist/RDKit_minimal.wasm?url";
+import initRDKitModule from "../vendor/rdkit/RDKit_minimal.mjs";
+import rdkitWasmUrl from "../vendor/rdkit/RDKit_minimal.wasm?url";
 
 let modulePromise;
 

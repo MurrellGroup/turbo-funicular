@@ -1,6 +1,21 @@
 import { chromium } from "playwright";
 
-import { miniPdb } from "./fixtures.mjs";
+import { miniCcd, miniPdb } from "./fixtures.mjs";
+
+const NSW_SMILES = "Oc1ccc(CN2Nc3c(Cc4ccccc4)nc(c[n+]3C2=O)c5ccc(O)cc5)cc1";
+const NSW_TRAINING_NUMBERS = [
+  8, 6, 7, 6, 6, 6, 6, 6, 8, 6, 6, 7, 6, 6, 6, 6,
+  6, 6, 6, 6, 6, 7, 6, 6, 7, 6, 6, 6, 6, 8, 6, 6,
+];
+const NSW_TRAINING_BONDS = [
+  [0, 1, 1], [1, 2, 3], [1, 24, 3], [2, 3, 0], [2, 11, 3], [3, 4, 0],
+  [4, 5, 3], [4, 10, 3], [5, 6, 3], [6, 7, 3], [7, 8, 0], [7, 9, 3],
+  [9, 10, 3], [11, 12, 3], [12, 13, 3], [12, 24, 3], [13, 14, 0],
+  [13, 21, 3], [14, 15, 0], [15, 16, 3], [15, 20, 3], [16, 17, 3],
+  [17, 18, 3], [18, 19, 3], [19, 20, 3], [21, 22, 3], [22, 23, 3],
+  [22, 25, 0], [23, 24, 3], [25, 26, 3], [25, 31, 3], [26, 27, 3],
+  [27, 28, 3], [28, 29, 0], [28, 30, 3], [30, 31, 3],
+];
 
 const executablePath = process.env.CHROME_PATH
   ?? "/home/murrellb/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome";
@@ -18,6 +33,10 @@ const browser = await chromium.launch({
 
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: true });
+  await page.route("**/BEN.cif", (route) => route.fulfill({
+    body: miniCcd(),
+    contentType: "text/plain",
+  }));
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
@@ -27,6 +46,7 @@ try {
     `${request.method()} ${request.url()}: ${request.failure()?.errorText}`,
   ));
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
+  await page.waitForFunction(() => window.__wsfmdock?.ready, null, { timeout: 120_000 });
   await page.evaluate(() => window.__wsfmdock.ready);
   await page.click("#custom-tab");
   await page.fill("#pdb-id-input", "8BO9");
@@ -38,13 +58,67 @@ try {
     directedEdges: window.__wsfmdock.sample.neighbors.filter(([atom]) => atom >= 0).length,
     aromaticEdges: window.__wsfmdock.sample.neighbors.filter(([, type]) => type === 3).length,
     graphSource: window.__wsfmdock.sample.graph_source,
+    ligandNumbers: window.__wsfmdock.sample.atomic_numbers.slice(-32),
+    ligandBonds: (() => {
+      const sample = window.__wsfmdock.sample;
+      const offset = sample.roles.indexOf(3);
+      const bonds = [];
+      for (let query = offset; query < sample.atoms; query += 1) {
+        for (const [key, type] of sample.neighbors.slice(query * 10, query * 10 + 10)) {
+          if (key > query) bonds.push([query - offset, key - offset, type]);
+        }
+      }
+      return bonds.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+    })(),
   }));
   if (fetched.atoms !== 1402
     || fetched.ligandAtoms !== 32
     || fetched.directedEdges !== 72
-    || fetched.aromaticEdges === 0
-    || fetched.graphSource !== "RCSB CCD connectivity") {
+    || fetched.aromaticEdges !== 56
+    || JSON.stringify(fetched.ligandNumbers) !== JSON.stringify(NSW_TRAINING_NUMBERS)
+    || JSON.stringify(fetched.ligandBonds) !== JSON.stringify(NSW_TRAINING_BONDS)
+    || fetched.graphSource !== "RCSB CCD graph") {
     throw new Error(`PDB-ID preparation differs: ${JSON.stringify(fetched)}`);
+  }
+
+  const pdbConditioning = await page.evaluate(() => {
+    const sample = window.__wsfmdock.sample;
+    return JSON.stringify([
+      sample.base_means, sample.base_scales, sample.atomic_numbers, sample.roles,
+      sample.residue_types, sample.atom_names, sample.entity_ids,
+      sample.coordinate_design, sample.neighbors,
+    ]);
+  });
+  const pdbOutput = await page.evaluate(async () => {
+    document.getElementById("step-select").value = "4";
+    document.getElementById("seed-input").value = "8128";
+    await window.__wsfmdock.runInference();
+    return [...await window.__wsfmdock.model.coordinates()];
+  });
+  await page.evaluate((smiles) => window.__wsfmdock.replaceLigand(smiles), NSW_SMILES);
+  await page.waitForFunction(() => window.__wsfmdock.sample?.id.endsWith("-smiles"));
+  const smilesConditioning = await page.evaluate(() => {
+    const sample = window.__wsfmdock.sample;
+    return JSON.stringify([
+      sample.base_means, sample.base_scales, sample.atomic_numbers, sample.roles,
+      sample.residue_types, sample.atom_names, sample.entity_ids,
+      sample.coordinate_design, sample.neighbors,
+    ]);
+  });
+  if (pdbConditioning !== smilesConditioning) {
+    throw new Error("8BO9 PDB and equivalent SMILES conditioning tensors differ.");
+  }
+  const smilesOutput = await page.evaluate(async () => {
+    document.getElementById("step-select").value = "4";
+    document.getElementById("seed-input").value = "8128";
+    await window.__wsfmdock.runInference();
+    return [...await window.__wsfmdock.model.coordinates()];
+  });
+  const inferenceDelta = Math.max(...pdbOutput.map((value, index) => (
+    Math.abs(value - smilesOutput[index])
+  )));
+  if (inferenceDelta >= 1e-6) {
+    throw new Error(`8BO9 PDB and equivalent SMILES inference differs by ${inferenceDelta}.`);
   }
 
   await page.setInputFiles("#pdb-input", {
@@ -58,11 +132,12 @@ try {
     ligandAtoms: window.__wsfmdock.sample.roles.filter((role) => role === 3).length,
     directedEdges: window.__wsfmdock.sample.neighbors.filter(([atom]) => atom >= 0).length,
     graphSource: window.__wsfmdock.sample.graph_source,
+    status: document.getElementById("status").textContent,
   }));
   if (pdb.atoms !== 15
     || pdb.ligandAtoms !== 6
     || pdb.directedEdges !== 12
-    || pdb.graphSource !== "RCSB CCD connectivity") {
+    || pdb.graphSource !== "RCSB CCD graph") {
     throw new Error(`PDB browser preparation differs: ${JSON.stringify(pdb)}`);
   }
 
@@ -158,7 +233,7 @@ try {
   }
   if (errors.length) throw new Error(`Browser errors: ${errors.join("; ")}`);
   console.log(JSON.stringify({
-    fetched, pdb, unavailable, rendering, smiles, inference, referenceVisible, mobile,
+    fetched, inferenceDelta, pdb, unavailable, rendering, smiles, inference, referenceVisible, mobile,
   }, null, 2));
 } finally {
   await browser.close();

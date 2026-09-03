@@ -322,13 +322,40 @@ function ccdLigandBonds(options, ligand, componentGraphs) {
   return bonds;
 }
 
+function orderLigandOptions(options, componentGraphs) {
+  return options.map((option) => {
+    const componentId = option.atoms[0].rawResidue;
+    const graph = componentGraphs.get(componentId);
+    if (!graph) throw new GraphUnavailableError(componentId, "Its RCSB CCD definition could not be loaded.");
+    const byName = new Map(option.atoms.map((atom) => [atom.atomName, atom]));
+    if (byName.size !== option.atoms.length) {
+      throw new GraphUnavailableError(componentId, "Its PDB atom names are not unique.");
+    }
+    const atoms = graph.atoms.map((definition) => {
+      const atom = byName.get(definition.name);
+      if (!atom) throw new GraphUnavailableError(componentId, `Heavy atom ${definition.name} is absent from the PDB.`);
+      if (atom.atomicNumber !== definition.atomicNumber) {
+        throw new GraphUnavailableError(componentId, `Atom ${definition.name} has an element mismatch.`);
+      }
+      return atom;
+    });
+    if (atoms.length !== option.atoms.length) {
+      throw new GraphUnavailableError(componentId, "Its PDB and CCD heavy-atom counts differ.");
+    }
+    return { ...option, atoms };
+  });
+}
+
 export function preparePdbSample(
   structure,
   ligandId = structure.defaultLigandId,
   componentGraphs = new Map(),
 ) {
   const protein = prepareProtein(structure.proteinAtoms);
-  const selectedOptions = selectedLigandOptions(structure, ligandId);
+  const selectedOptions = orderLigandOptions(
+    selectedLigandOptions(structure, ligandId),
+    componentGraphs,
+  );
   const ligand = selectedOptions.flatMap((option) => option.atoms);
   const center = meanCoordinate(protein);
   const coords = protein.map((atom) => subtract(atom.coord, center));
@@ -415,7 +442,7 @@ export function preparePdbSample(
     chainIds,
     bonds: [...ligandBonds, ...attachments],
     graphSource: ligand.length
-      ? `RCSB CCD connectivity${attachments.length ? " plus explicit PDB links" : ""}`
+      ? `RCSB CCD graph${attachments.length ? " plus explicit PDB links" : ""}`
       : "receptor only",
   });
 }

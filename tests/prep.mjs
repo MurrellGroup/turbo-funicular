@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import initRDKitModule from "@rdkit/rdkit";
+import initRDKitModule from "../vendor/rdkit/RDKit_minimal.cjs";
 
-import { parseCcdGraph } from "../src/ccd.js";
+import { parseCcdGraph, trainingGraphFromCcd } from "../src/ccd.js";
 import { graphFromSmiles } from "../src/chemistry.js";
 import { GraphUnavailableError, parsePdb, preparePdbSample, replaceLigand } from "../src/prep.js";
 import { validateSample } from "../src/sample.js";
 import { miniCcd, miniPdb } from "./fixtures.mjs";
 
 const rdkit = await initRDKitModule();
-const benGraph = parseCcdGraph(miniCcd(), "BEN");
+const benGraph = trainingGraphFromCcd(rdkit, parseCcdGraph(miniCcd(), "BEN"));
 
 test("PDB preparation matches the model input contract", () => {
   const structure = parsePdb(miniPdb(), "mini.pdb");
@@ -24,7 +24,7 @@ test("PDB preparation matches the model input contract", () => {
   assert.equal(sample.ligand_bonds.length, 6);
   assert.equal(sample.neighbors.filter(([atom]) => atom >= 0).length, 12);
   assert.equal(sample.neighbors.filter(([, type]) => type === 3).length, 12);
-  assert.equal(sample.graph_source, "RCSB CCD connectivity");
+  assert.equal(sample.graph_source, "RCSB CCD graph");
   const proteinMean = sample.target_coords.slice(0, 9).reduce(
     (sum, point) => sum.map((value, axis) => value + point[axis] / 9),
     [0, 0, 0],
@@ -45,7 +45,7 @@ test("explicit LINK records add protein-ligand bonds without geometry inference"
   const sample = preparePdbSample(structure, structure.defaultLigandId, new Map([["BEN", benGraph]]));
   assert.equal(sample.neighbors.filter(([atom]) => atom >= 0).length, 14);
   assert.equal(sample.ligand_bonds.length, 7);
-  assert.equal(sample.graph_source, "RCSB CCD connectivity plus explicit PDB links");
+  assert.equal(sample.graph_source, "RCSB CCD graph plus explicit PDB links");
 });
 
 test("RDKit SMILES replacement emits an exact heavy-atom graph", () => {
@@ -60,6 +60,18 @@ test("RDKit SMILES replacement emits an exact heavy-atom graph", () => {
   assert.equal(sample.atoms, 22);
   assert.equal(sample.roles.filter((role) => role === 3).length, 13);
   assert.equal(sample.neighbors.filter(([atom]) => atom >= 0).length, 26);
+});
+
+test("equivalent PDB/CCD and SMILES inputs produce identical conditioning tensors", () => {
+  const structure = parsePdb(miniPdb(), "mini.pdb");
+  const pdb = preparePdbSample(structure, structure.defaultLigandId, new Map([["BEN", benGraph]]));
+  const smiles = replaceLigand(pdb, graphFromSmiles(rdkit, "c1ccccc1"));
+  for (const name of [
+    "base_means", "base_scales", "atomic_numbers", "roles", "residue_types",
+    "atom_names", "entity_ids", "coordinate_design", "neighbors",
+  ]) {
+    assert.deepEqual(smiles[name], pdb[name], `${name} differs`);
+  }
 });
 
 test("explicit SMILES hydrogens are removed", () => {

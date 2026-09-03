@@ -105,7 +105,7 @@ async function preparedPdbSelection(structure, ligandId) {
     ? structure.ligandOptions
     : structure.ligandOptions.filter((option) => option.id === ligandId);
   const componentIds = options.map((option) => option.atoms[0].rawResidue);
-  const componentGraphs = await loadCcdGraphs(componentIds);
+  const componentGraphs = await loadCcdGraphs(componentIds, rdkit);
   return preparePdbSample(structure, ligandId, componentGraphs);
 }
 

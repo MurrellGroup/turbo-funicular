@@ -50,6 +50,52 @@ function bondType(order, aromatic) {
   throw new Error(`Unsupported SMILES bond order: ${order}`);
 }
 
+function canonicalGraphOrder(molecule, bonds, atoms) {
+  if (typeof molecule.get_canonical_ranks !== "function") {
+    throw new Error("The bundled RDKit runtime lacks canonical graph ordering.");
+  }
+  const ranks = JSON.parse(molecule.get_canonical_ranks());
+  if (ranks.length !== atoms || new Set(ranks).size !== atoms) {
+    throw new Error("RDKit did not produce a unique canonical rank for every atom.");
+  }
+  const adjacency = Array.from({ length: atoms }, () => []);
+  for (const { left, right } of bonds) {
+    adjacency[left].push(right);
+    adjacency[right].push(left);
+  }
+  const fragments = connectedComponents(atoms, bonds);
+  const members = new Map();
+  for (let atom = 0; atom < atoms; atom += 1) {
+    if (!members.has(fragments[atom])) members.set(fragments[atom], []);
+    members.get(fragments[atom]).push(atom);
+  }
+  const components = [...members.values()].sort((left, right) => (
+    Math.min(...left.map((atom) => ranks[atom]))
+    - Math.min(...right.map((atom) => ranks[atom]))
+  ));
+  const order = [];
+  const entityIds = [];
+  for (let entity = 0; entity < components.length; entity += 1) {
+    const allowed = new Set(components[entity]);
+    const visited = new Set();
+    const visit = (atom) => {
+      if (visited.has(atom)) return;
+      visited.add(atom);
+      order.push(atom);
+      entityIds.push(entity);
+      const neighbors = adjacency[atom]
+        .filter((neighbor) => allowed.has(neighbor))
+        .sort((left, right) => ranks[left] - ranks[right]);
+      for (const neighbor of neighbors) visit(neighbor);
+    };
+    visit(components[entity].reduce((best, atom) => (
+      ranks[atom] < ranks[best] ? atom : best
+    )));
+    if (visited.size !== allowed.size) throw new Error("Canonical graph traversal was incomplete.");
+  }
+  return { order, entityIds };
+}
+
 export function graphFromSmiles(rdkit, smiles) {
   const input = smiles.trim();
   if (!input) throw new Error("Enter a SMILES string first.");
@@ -75,15 +121,20 @@ export function graphFromSmiles(rdkit, smiles) {
       right: bond.atoms[1],
       type: bondType(bond.bo ?? defaultBondOrder, aromatic.has(index)),
     }));
-    const coordinates = centered(molblockCoordinates(
+    const { order, entityIds } = canonicalGraphOrder(molecule, bonds, atomicNumbers.length);
+    const originalCoordinates = centered(molblockCoordinates(
       molecule.get_new_coords(true),
       atomicNumbers.length,
     ));
+    const inverse = new Int32Array(order.length);
+    order.forEach((atom, index) => { inverse[atom] = index; });
     return {
-      atomicNumbers,
-      bonds,
-      coordinates,
-      entityIds: connectedComponents(atomicNumbers.length, bonds),
+      atomicNumbers: order.map((atom) => atomicNumbers[atom]),
+      bonds: bonds.map(({ left, right, type }) => ({
+        left: inverse[left], right: inverse[right], type,
+      })),
+      coordinates: order.map((atom) => originalCoordinates[atom]),
+      entityIds,
       canonicalSmiles: molecule.get_smiles(),
     };
   } catch (error) {
