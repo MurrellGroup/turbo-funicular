@@ -5,7 +5,7 @@ export function validateSample(sample, maximumAtoms = Number.POSITIVE_INFINITY) 
     throw new Error(`This WebGPU adapter supports at most ${maximumAtoms.toLocaleString()} atoms for this model; the prepared structure has ${n.toLocaleString()}.`);
   }
   for (const name of [
-    "base_scales", "atomic_numbers", "roles", "residue_types", "atom_names",
+    "base_scales", "initial_scales", "atomic_numbers", "roles", "residue_types", "atom_names",
     "entity_ids", "coordinate_design",
   ]) {
     if (sample[name]?.length !== n) throw new Error(`${name} must have one value per atom.`);
@@ -14,6 +14,10 @@ export function validateSample(sample, maximumAtoms = Number.POSITIVE_INFINITY) 
     if (sample[name]?.length !== n || sample[name].some((point) => point.length !== 3)) {
       throw new Error(`${name} must have one XYZ coordinate per atom.`);
     }
+    if (sample[name].some(point => point.some(v => !Number.isFinite(v)))) throw new Error(`Nonfinite ${name}.`);
+  }
+  for (const name of ['base_scales', 'initial_scales']) {
+    if (sample[name].some(v => !Number.isFinite(v) || v < 0)) throw new Error(`Invalid ${name}.`);
   }
   if (sample.neighbors?.length !== n * 10 || sample.neighbors.some((edge) => edge.length !== 2)) {
     throw new Error("neighbors must contain exactly ten sparse pair slots per atom.");
@@ -29,6 +33,17 @@ export function validateSample(sample, maximumAtoms = Number.POSITIVE_INFINITY) 
     if (!Number.isInteger(edge[0]) || edge[0] < 0 || edge[0] >= n
       || !Number.isInteger(edge[1]) || edge[1] < 0 || edge[1] > 3) {
       throw new Error("Sample contains an invalid sparse molecular-graph edge.");
+    }
+  }
+  for (let atom = 0; atom < n; atom += 1) {
+    const seen = new Set();
+    for (const [other, type] of sample.neighbors.slice(atom * 10, atom * 10 + 10)) {
+      if (other < 0) continue;
+      if (other === atom || seen.has(other)) throw new Error('Self or duplicate molecular bond.');
+      seen.add(other);
+      if (!sample.neighbors.slice(other * 10, other * 10 + 10).some(([back, t]) => back === atom && t === type)) {
+        throw new Error('Molecular bond is not reciprocal.');
+      }
     }
   }
 }

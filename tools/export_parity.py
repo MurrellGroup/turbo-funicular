@@ -40,8 +40,8 @@ def dense_flex_attention(q, k, v, *, score_mod, **_kwargs):
 def main() -> None:
     args = arguments()
     sys.path.insert(0, str(args.ckdock))
-    import docking.model as model_module
-    from docking.model import EndpointDockingCKModel, ModelConfig, make_bond_pair_features
+    import wsfmdock.model as model_module
+    from wsfmdock.model import EndpointDockingCKModel, ModelConfig, make_bond_pair_features
 
     model_module.flex_attention = dense_flex_attention
     sample = json.loads(args.sample.read_text())
@@ -58,7 +58,8 @@ def main() -> None:
     design = np.asarray(sample["coordinate_design"], dtype=np.bool_)
     coords = target.copy()
     base_noise = rng.standard_normal((n, 3), dtype=np.float32)
-    coords[design] = means[design] + scales[design, None] * base_noise[design]
+    initial_scales = np.asarray(sample['initial_scales'], dtype=np.float32)
+    coords[design] = means[design] + initial_scales[design, None] * base_noise[design]
     variance = scales**2 * (args.end - args.start) * (2 - args.start - args.end)
     increment = np.sqrt(variance)[:, None] * rng.standard_normal((n, 3), dtype=np.float32)
     latent = rng.standard_normal((n, 3), dtype=np.float32)
@@ -119,4 +120,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

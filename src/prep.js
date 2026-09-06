@@ -1,5 +1,7 @@
-import { connectedComponents } from "./chemistry.js";
+import { connectedComponents, orderObservedGraph } from "./chemistry.js";
+import proteinGraph from './protein_graph.json' with { type: 'json' };
 
+export const ROLE_MOLECULE = 0;
 export const ROLE_BACKBONE = 1;
 export const ROLE_SIDECHAIN = 2;
 export const ROLE_LIGAND = 3;
@@ -37,10 +39,7 @@ const ELEMENTS = [
   "Mt", "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og",
 ];
 const ELEMENT_NUMBER = new Map(ELEMENTS.map((symbol, index) => [symbol.toUpperCase(), index]));
-const COVALENT_RADII = new Map([
-  [5, 0.84], [6, 0.76], [7, 0.71], [8, 0.66], [9, 0.57], [14, 1.11],
-  [15, 1.07], [16, 1.05], [17, 1.02], [34, 1.20], [35, 1.20], [53, 1.39],
-]);
+export { RESIDUE_INDEX, RESIDUE_ALIASES, ELEMENT_NUMBER, WATER_NAMES, atomLocator };
 
 function elementNumber(line, atomName, protein) {
   const declared = line.slice(76, 78).trim().toUpperCase();
@@ -52,10 +51,6 @@ function elementNumber(line, atomName, protein) {
     if (ELEMENT_NUMBER.has(pair)) return ELEMENT_NUMBER.get(pair);
   }
   return ELEMENT_NUMBER.get(cleaned[0].toUpperCase()) ?? 0;
-}
-
-function distance(left, right) {
-  return Math.hypot(left[0] - right[0], left[1] - right[1], left[2] - right[2]);
 }
 
 function meanCoordinate(atoms) {
@@ -88,7 +83,7 @@ function parseLinkAtom(line, second = false) {
 export function parsePdb(text, filename = "structure.pdb") {
   const lines = text.replaceAll("\r", "").split("\n");
   const atoms = [];
-  const occupied = new Set();
+  const occupied = new Map();
   let modelSeen = false;
   let modelComplete = false;
   const title = lines
@@ -107,7 +102,7 @@ export function parsePdb(text, filename = "structure.pdb") {
       continue;
     }
     if (modelComplete || (record !== "ATOM" && record !== "HETATM")) continue;
-    if (line.length < 54 || !["", "A"].includes(line[16]?.trim() ?? "")) continue;
+    if (line.length < 54) continue;
     const serial = Number.parseInt(line.slice(6, 11), 10);
     const atomName = line.slice(12, 16).trim().toUpperCase();
     const rawResidue = line.slice(17, 20).trim().toUpperCase();
@@ -120,8 +115,6 @@ export function parsePdb(text, filename = "structure.pdb") {
       && (record === "ATOM" || RESIDUE_ALIASES.has(rawResidue));
     if (!protein && (record !== "HETATM" || WATER_NAMES.has(rawResidue))) continue;
     const key = `${protein ? "P" : "L"}|${residueKey}|${rawResidue}|${atomName}`;
-    if (occupied.has(key)) continue;
-    occupied.add(key);
     const coord = [
       Number.parseFloat(line.slice(30, 38)),
       Number.parseFloat(line.slice(38, 46)),
@@ -130,13 +123,23 @@ export function parsePdb(text, filename = "structure.pdb") {
     const atomicNumber = elementNumber(line, atomName, protein);
     if (!Number.isInteger(serial) || coord.some((value) => !Number.isFinite(value))) continue;
     if (atomicNumber <= 1 || atomicNumber >= 128) continue;
-    atoms.push({
+    const atom = {
       serial, atomName, rawResidue, residueName, residueKey, chain, residueNumber,
-      insertion, coord, atomicNumber, protein, line,
-    });
+      insertion, coord, atomicNumber, protein, line, alt: line[16]?.trim() ?? '',
+      occupancy: Number.parseFloat(line.slice(54, 60)) || 0,
+    };
+    if (occupied.has(key)) {
+      const previous = atoms[occupied.get(key)];
+      const preference = a => a.alt === 'A' ? 2 : !a.alt ? 1 : 0;
+      if (atom.occupancy > previous.occupancy || (atom.occupancy === previous.occupancy
+          && preference(atom) > preference(previous))) atoms[occupied.get(key)] = atom;
+    } else {
+      occupied.set(key, atoms.length);
+      atoms.push(atom);
+    }
   }
   const proteinAtoms = atoms.filter((atom) => atom.protein);
-  if (!proteinAtoms.length) throw new Error("PDB contains no supported protein heavy atoms.");
+  if (!atoms.length) throw new Error("PDB contains no supported heavy atoms.");
   const ligandAtoms = atoms.filter((atom) => !atom.protein);
   const groups = new Map();
   for (const atom of ligandAtoms) {
@@ -165,6 +168,10 @@ export function parsePdb(text, filename = "structure.pdb") {
     .map((line) => [parseLinkAtom(line), parseLinkAtom(line, true)])
     .filter(([first, second]) => first.atomName && second.atomName
       && Number.isInteger(first.residueNumber) && Number.isInteger(second.residueNumber));
+  const connectionErrors = lines.filter(line => line.startsWith('LINK  '))
+    .filter(line => [line.slice(59, 65).trim(), line.slice(66, 72).trim()]
+      .some(code => code && code !== '1555'))
+    .map(line => ({ endpoints: [parseLinkAtom(line), parseLinkAtom(line, true)] }));
   return {
     filename,
     title: title || filename,
@@ -172,11 +179,13 @@ export function parsePdb(text, filename = "structure.pdb") {
     ligandOptions,
     directedConnections,
     links,
+    connectionErrors,
     defaultLigandId: ligandOptions[0]?.id ?? null,
   };
 }
 
 function prepareProtein(atoms) {
+  if (!atoms.length) return [];
   const groups = new Map();
   for (const atom of atoms) {
     if (!groups.has(atom.residueKey)) groups.set(atom.residueKey, []);
@@ -187,7 +196,7 @@ function prepareProtein(atoms) {
   for (const residue of groups.values()) {
     const ca = residue.find((atom) => atom.atomName === "CA");
     const hasSidechain = residue.some((atom) => !BACKBONE_NAMES.has(atom.atomName));
-    if (!ca && hasSidechain) continue;
+    if (!ca && hasSidechain) throw new Error(`Protein residue ${residue[0].residueKey} has no CA anchor.`);
     const anchor = ca?.coord ?? meanCoordinate(residue);
     for (const atom of residue) prepared.push({ ...atom, anchor, residueId });
     residueId += 1;
@@ -197,34 +206,18 @@ function prepareProtein(atoms) {
 }
 
 function displayTopology(coords, atomicNumbers, roles, residueIds, chainIds, atomNames, bonds) {
-  const trace = [];
-  const ca = atomNames.flatMap((name, atom) => name === 1 && residueIds[atom] >= 0 ? [atom] : []);
-  for (let index = 1; index < ca.length; index += 1) {
-    const left = ca[index - 1];
-    const right = ca[index];
-    if (chainIds[left] === chainIds[right] && distance(coords[left], coords[right]) < 4.5) {
-      trace.push([left, right]);
-    }
-  }
-  const sidechain = [];
-  for (let left = 0; left < coords.length; left += 1) {
-    if (residueIds[left] < 0) continue;
-    for (let right = left + 1; right < coords.length; right += 1) {
-      if (residueIds[left] !== residueIds[right]) continue;
-      if (roles[left] !== ROLE_SIDECHAIN && roles[right] !== ROLE_SIDECHAIN) continue;
-      const radius = (COVALENT_RADII.get(atomicNumbers[left]) ?? 0.85)
-        + (COVALENT_RADII.get(atomicNumbers[right]) ?? 0.85);
-      const separation = distance(coords[left], coords[right]);
-      if (separation > 0.8 && separation <= 1.25 * radius) sidechain.push([left, right]);
-    }
-  }
+  const trace = bonds.filter(b => roles[b.left] === ROLE_BACKBONE && roles[b.right] === ROLE_BACKBONE)
+    .map(b => [b.left, b.right]);
+  const sidechain = bonds.filter(b => roles[b.left] !== ROLE_LIGAND && roles[b.right] !== ROLE_LIGAND
+    && (roles[b.left] === ROLE_SIDECHAIN || roles[b.right] === ROLE_SIDECHAIN)).map(b => [b.left, b.right]);
   return {
     backbone_trace_pairs: trace,
     sidechain_bonds: sidechain,
     ligand_bonds: bonds
       .filter(({ left, right }) => roles[left] === ROLE_LIGAND || roles[right] === ROLE_LIGAND)
       .map(({ left, right }) => [left, right]),
-    molecule_bonds: [],
+    molecule_bonds: bonds.filter(b => roles[b.left] === ROLE_MOLECULE && roles[b.right] === ROLE_MOLECULE)
+      .map(b => [b.left, b.right]),
   };
 }
 
@@ -250,8 +243,8 @@ function assembleSample({
       degree[query] += 1;
     }
   }
-  const coordinateDesign = roles.map((role) => role === ROLE_SIDECHAIN || role === ROLE_LIGAND ? 1 : 0);
-  const baseScales = roles.map((role) => role === ROLE_LIGAND ? 1 : role === ROLE_SIDECHAIN ? 0.5 : 0);
+  const coordinateDesign = roles.map((role) => role === ROLE_BACKBONE ? 0 : 1);
+  const baseScales = roles.map((role) => role === ROLE_MOLECULE || role === ROLE_LIGAND ? 1 : role === ROLE_SIDECHAIN ? 0.5 : 0);
   return {
     format: "wsfmdock_webgpu_sample_v1",
     id,
@@ -261,6 +254,7 @@ function assembleSample({
     target_coords: coords,
     base_means: baseMeans,
     base_scales: baseScales,
+    initial_scales: roles.map(role => role === ROLE_MOLECULE || role === ROLE_LIGAND ? 10 : role === ROLE_SIDECHAIN ? 0.5 : 0),
     atomic_numbers: atomicNumbers,
     roles,
     residue_types: residueTypes,
@@ -269,6 +263,7 @@ function assembleSample({
     coordinate_design: coordinateDesign,
     neighbors,
     residue_ids: residueIds,
+    chain_ids: chainIds,
     graph_source: graphSource,
     ...(topology ?? displayTopology(
       coords, atomicNumbers, roles, residueIds, chainIds, atomNames, bonds,
@@ -283,11 +278,28 @@ export class GraphUnavailableError extends Error {
   }
 }
 
-function selectedLigandOptions(structure, ligandId) {
+export function selectedLigandOptions(structure, ligandId) {
   if (!ligandId) return [];
   if (ligandId === "__all__") return structure.ligandOptions;
   const option = structure.ligandOptions.find((value) => value.id === ligandId);
-  return option ? [option] : [];
+  if (!option) return [];
+  const selected = new Set(option.atoms.map(atomLocator));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [first, second] of structure.links) {
+      const keys = [atomLocator(first), atomLocator(second)];
+      if (!keys.some(key => selected.has(key))) continue;
+      for (const candidate of structure.ligandOptions) {
+        if (!candidate.atoms.some(a => keys.includes(atomLocator(a)))) continue;
+        for (const atom of candidate.atoms) {
+          const key = atomLocator(atom);
+          if (!selected.has(key)) { selected.add(key); changed = true; }
+        }
+      }
+    }
+  }
+  return structure.ligandOptions.filter(item => item.atoms.some(a => selected.has(atomLocator(a))));
 }
 
 function ccdLigandBonds(options, ligand, componentGraphs) {
@@ -328,6 +340,7 @@ function orderLigandOptions(options, componentGraphs) {
     const graph = componentGraphs.get(componentId);
     if (!graph) throw new GraphUnavailableError(componentId, "Its RCSB CCD definition could not be loaded.");
     const byName = new Map(option.atoms.map((atom) => [atom.atomName, atom]));
+    if (graph.glycan) return option;
     if (byName.size !== option.atoms.length) {
       throw new GraphUnavailableError(componentId, "Its PDB atom names are not unique.");
     }
@@ -350,61 +363,86 @@ export function preparePdbSample(
   structure,
   ligandId = structure.defaultLigandId,
   componentGraphs = new Map(),
+  rdkit = null,
 ) {
   const protein = prepareProtein(structure.proteinAtoms);
   const selectedOptions = orderLigandOptions(
     selectedLigandOptions(structure, ligandId),
     componentGraphs,
   );
-  const ligand = selectedOptions.flatMap((option) => option.atoms);
-  const center = meanCoordinate(protein);
+  let ligand = selectedOptions.flatMap((option) => option.atoms);
+  const selectedLocations = new Set(ligand.map(atomLocator));
+  if (structure.connectionErrors?.some(error => error.endpoints.some(e => selectedLocations.has(atomLocator(e))))) {
+    throw new Error('A selected component has an unresolved or symmetry-crossing covalent connection.');
+  }
+  // Rank complete observed glycan components, never isolated monosaccharide templates.
+  let ligandGraph = ccdLigandBonds(selectedOptions, ligand, componentGraphs);
+  let locations = new Map(ligand.map((a, i) => [atomLocator(a), i]));
+  for (const [a, b, type = 0] of structure.links) {
+    const left = locations.get(atomLocator(a)), right = locations.get(atomLocator(b));
+    if (left !== undefined && right !== undefined) ligandGraph.set(`${Math.min(left, right)}:${Math.max(left, right)}`, type);
+  }
+  const graphEdges = [...ligandGraph].map(([key, type]) => {
+    const [left, right] = key.split(':').map(Number); return { left, right, type };
+  });
+  const components = connectedComponents(ligand.length, graphEdges);
+  const order = [];
+  for (const component of new Set(components)) {
+    const indices = components.flatMap((id, i) => id === component ? [i] : []);
+    if (indices.some(i => componentGraphs.get(ligand[i].rawResidue)?.glycan)) {
+      if (!rdkit) throw new Error('RDKit is required for glycan preparation.');
+      const inverse = new Map(indices.map((i, j) => [i, j]));
+      const atoms = indices.map(i => ({ ...ligand[i], charge: componentGraphs.get(ligand[i].rawResidue)
+        .atoms.find(a => a.name === ligand[i].atomName)?.charge ?? 0 }));
+      const edges = graphEdges.filter(b => inverse.has(b.left) && inverse.has(b.right))
+        .map(b => ({ left: inverse.get(b.left), right: inverse.get(b.right), type: b.type }));
+      order.push(...orderObservedGraph(rdkit, atoms, edges).order.map(i => indices[i]));
+    } else order.push(...indices);
+  }
+  const inverseOrder = new Map(order.map((old, i) => [old, i]));
+  ligand = order.map(i => ligand[i]);
+  ligandGraph = new Map(graphEdges.map(b => {
+    const left = inverseOrder.get(b.left), right = inverseOrder.get(b.right);
+    return [`${Math.min(left, right)}:${Math.max(left, right)}`, b.type];
+  }));
+  const center = meanCoordinate(protein.length ? protein : ligand);
+  if (!protein.length && !ligand.length) throw new Error('No selected heavy atoms.');
   const coords = protein.map((atom) => subtract(atom.coord, center));
   const baseMeans = protein.map((atom) => subtract(atom.anchor, center));
   const atomicNumbers = protein.map((atom) => atom.atomicNumber);
   const roles = protein.map((atom) => BACKBONE_NAMES.has(atom.atomName) ? ROLE_BACKBONE : ROLE_SIDECHAIN);
   const residueTypes = protein.map((atom) => RESIDUE_INDEX.get(atom.residueName));
   const atomNames = protein.map((atom) => ATOM_NAME_INDEX.get(atom.atomName) ?? UNKNOWN_ATOM_NAME);
-  const entityIds = protein.map(() => 0);
   const residueIds = protein.map((atom) => atom.residueId);
   const chainMap = new Map();
   const chainIds = protein.map((atom) => {
     if (!chainMap.has(atom.chain)) chainMap.set(atom.chain, chainMap.size);
     return chainMap.get(atom.chain);
   });
-  const proteinSerials = new Map(protein.map((atom, index) => [atom.serial, index]));
+  const entityIds = [...chainIds];
   const ligandOffset = protein.length;
-  const ligandSerials = new Map(ligand.map((atom, index) => [atom.serial, ligandOffset + index]));
-  const ligandGraph = ccdLigandBonds(selectedOptions, ligand, componentGraphs);
   const ligandBonds = [...ligandGraph].map(([key, type]) => {
     const [left, right] = key.split(":").map(Number);
     return { left: ligandOffset + left, right: ligandOffset + right, type };
   });
   const attachmentBonds = new Map();
-  for (const [ligandSerial, ligandIndex] of ligandSerials) {
-    for (const [proteinSerial, proteinIndex] of proteinSerials) {
-      const multiplicity = Math.max(
-        structure.directedConnections.get(`${ligandSerial}:${proteinSerial}`) ?? 0,
-        structure.directedConnections.get(`${proteinSerial}:${ligandSerial}`) ?? 0,
-      );
-      if (multiplicity) {
-        const key = proteinIndex < ligandIndex
-          ? `${proteinIndex}:${ligandIndex}`
-          : `${ligandIndex}:${proteinIndex}`;
-        attachmentBonds.set(key, Math.min(multiplicity, 3) - 1);
-      }
-    }
-  }
   const locatedAtoms = new Map([
     ...protein.map((atom, index) => [atomLocator(atom), index]),
     ...ligand.map((atom, index) => [atomLocator(atom), ligandOffset + index]),
   ]);
-  for (const [first, second] of structure.links) {
+  for (const [first, second, type = 0] of structure.links) {
     const left = locatedAtoms.get(atomLocator(first));
     const right = locatedAtoms.get(atomLocator(second));
-    if (left === undefined || right === undefined) continue;
+    if (left === undefined || right === undefined) {
+      if (selectedLocations.has(atomLocator(first)) || selectedLocations.has(atomLocator(second))) {
+        throw new Error('An explicit covalent link loses an endpoint in the selected structure.');
+      }
+      continue;
+    }
     if (left < ligandOffset && right < ligandOffset) continue;
+    if (left >= ligandOffset && right >= ligandOffset) continue;
     const key = left < right ? `${left}:${right}` : `${right}:${left}`;
-    attachmentBonds.set(key, 0);
+    attachmentBonds.set(key, type);
   }
   const attachments = [...attachmentBonds].map(([key, type]) => {
     const [left, right] = key.split(":").map(Number);
@@ -418,17 +456,34 @@ export function preparePdbSample(
     coords.push(subtract(atom.coord, center));
     baseMeans.push([0, 0, 0]);
     atomicNumbers.push(atom.atomicNumber);
-    roles.push(ROLE_LIGAND);
+    roles.push(protein.length ? ROLE_LIGAND : ROLE_MOLECULE);
     residueTypes.push(UNKNOWN_RESIDUE);
     atomNames.push(UNKNOWN_ATOM_NAME);
     residueIds.push(-1);
     chainIds.push(-1);
   }
-  entityIds.push(...ligandEntities.map((value) => value + 1));
+  entityIds.push(...ligandEntities.map((value) => value + chainMap.size));
+  const proteinBonds = [];
+  for (const residueId of new Set(protein.map(a => a.residueId))) {
+    const indices = protein.flatMap((a, i) => a.residueId === residueId ? [i] : []);
+    const names = new Map(indices.map(i => [protein[i].atomName, i]));
+    const first = protein[indices[0]];
+    const template = proteinGraph[first.rawResidue === 'MSE' ? 'MSE' : first.residueName];
+    for (const [a, b, type] of template ?? []) {
+      const left = names.get(a), right = names.get(b);
+      if (left === undefined || right === undefined) continue;
+      for (const i of [left, right]) {
+        const name = protein[i].atomName;
+        const expected = name === 'SE' ? 34 : { C: 6, N: 7, O: 8, S: 16 }[name[0]];
+        if (protein[i].atomicNumber !== expected) throw new Error(`Protein atom element mismatch: ${name}`);
+      }
+      proteinBonds.push({ left, right, type });
+    }
+  }
   const selectedLabel = ligandId === "__all__"
     ? "all non-water components"
     : structure.ligandOptions.find((option) => option.id === ligandId)?.label;
-  return assembleSample({
+  const result = assembleSample({
     id: `pdb-${structure.filename}`,
     label: selectedLabel ? `${structure.title} / ${selectedLabel}` : structure.title,
     coords,
@@ -440,15 +495,17 @@ export function preparePdbSample(
     entityIds,
     residueIds,
     chainIds,
-    bonds: [...ligandBonds, ...attachments],
+    bonds: [...proteinBonds, ...ligandBonds, ...attachments],
     graphSource: ligand.length
       ? `RCSB CCD graph${attachments.length ? " plus explicit PDB links" : ""}`
       : "receptor only",
   });
+  result.atom_labels = [...protein, ...ligand].map(atomLocator);
+  return result;
 }
 
 export function replaceLigand(sample, graph) {
-  const keep = sample.roles.map((role, atom) => role !== ROLE_LIGAND ? atom : -1).filter((atom) => atom >= 0);
+  const keep = sample.roles.map((role, atom) => role === ROLE_BACKBONE || role === ROLE_SIDECHAIN ? atom : -1).filter((atom) => atom >= 0);
   const inverse = new Int32Array(sample.atoms).fill(-1);
   keep.forEach((atom, index) => { inverse[atom] = index; });
   const pick = (name) => keep.map((atom) => sample[name][atom]);
@@ -466,7 +523,7 @@ export function replaceLigand(sample, graph) {
     coords.push(graph.coordinates[atom]);
     baseMeans.push([0, 0, 0]);
     atomicNumbers.push(graph.atomicNumbers[atom]);
-    roles.push(ROLE_LIGAND);
+    roles.push(keep.length ? ROLE_LIGAND : ROLE_MOLECULE);
     residueTypes.push(UNKNOWN_RESIDUE);
     atomNames.push(UNKNOWN_ATOM_NAME);
     entityIds.push(proteinEntityMaximum + 1 + graph.entityIds[atom]);
@@ -480,6 +537,11 @@ export function replaceLigand(sample, graph) {
     right: ligandOffset + right,
     type,
   }));
+  for (const old of keep) {
+    for (const [other, type] of sample.neighbors.slice(old * 10, old * 10 + 10)) {
+      if (other > old && inverse[other] >= 0) bonds.push({ left: inverse[old], right: inverse[other], type });
+    }
+  }
   return assembleSample({
     id: `${sample.id}-smiles`,
     label: `${sample.label.split(" / ")[0]} / ${graph.canonicalSmiles}`,
@@ -491,12 +553,12 @@ export function replaceLigand(sample, graph) {
     atomNames,
     entityIds,
     residueIds,
-    chainIds: roles.map(() => 0),
+    chainIds: roles.map((role, i) => role === ROLE_LIGAND ? -1 : entityIds[i]),
     bonds,
     topology: {
       backbone_trace_pairs: remapPairs(sample.backbone_trace_pairs),
       sidechain_bonds: remapPairs(sample.sidechain_bonds),
-      ligand_bonds: bonds.map(({ left, right }) => [left, right]),
+      ligand_bonds: bonds.filter(b => b.left >= ligandOffset).map(({ left, right }) => [left, right]),
       molecule_bonds: [],
     },
     graphSource: `RDKit ${graph.canonicalSmiles}`,

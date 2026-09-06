@@ -3,7 +3,8 @@ import { MolecularViewer } from "./viewer.js";
 import { graphFromSmiles } from "./chemistry.js";
 import { loadCcdGraphs } from "./ccd.js";
 import { assetUrl, MODEL_MANIFEST_URL } from "./config.js";
-import { GraphUnavailableError, parsePdb, preparePdbSample, replaceLigand } from "./prep.js";
+import { GraphUnavailableError, parsePdb, preparePdbSample, replaceLigand, selectedLigandOptions } from "./prep.js";
+import { parseMmcif } from './mmcif.js';
 import { loadRdkit } from "./rdkit.js";
 
 const ui = Object.fromEntries([
@@ -101,19 +102,17 @@ function ligandOptions(structure) {
 }
 
 async function preparedPdbSelection(structure, ligandId) {
-  const options = ligandId === "__all__"
-    ? structure.ligandOptions
-    : structure.ligandOptions.filter((option) => option.id === ligandId);
+  const options = selectedLigandOptions(structure, ligandId);
   const componentIds = options.map((option) => option.atoms[0].rawResidue);
   const componentGraphs = await loadCcdGraphs(componentIds, rdkit);
-  return preparePdbSample(structure, ligandId, componentGraphs);
+  return preparePdbSample(structure, ligandId, componentGraphs, rdkit);
 }
 
 async function applyPdbSelection(structure, ligandId) {
   try {
     customSample = await preparedPdbSelection(structure, ligandId);
-    await applySample(customSample, `Prepared ${structure.filename}. ${customSample.graph_source}.`);
-    ui["structure-label"].textContent = `${structure.filename} / ${customSample.atoms.toLocaleString()} atoms / ${customSample.graph_source}`;
+    await applySample(customSample, `Prepared ${structure.filename}.`);
+    ui["structure-label"].textContent = `${structure.filename} / ${customSample.atoms.toLocaleString()} atoms`;
     return customSample;
   } catch (error) {
     if (!(error instanceof GraphUnavailableError)) throw error;
@@ -124,12 +123,12 @@ async function applyPdbSelection(structure, ligandId) {
   }
 }
 
-async function preparePdb(text, filename = "structure.pdb") {
+async function preparePdb(text, filename = "structure.pdb", depositedText = null) {
   if (running) return;
   setInputBusy(true);
   setStatus("Preparing the PDB in this browser tab.");
   try {
-    pdbStructure = parsePdb(text, filename);
+    pdbStructure = /^\s*data_/m.test(text) ? parseMmcif(text, filename, depositedText) : parsePdb(text, filename);
     ligandOptions(pdbStructure);
     setSourceMode("custom");
     return await applyPdbSelection(pdbStructure, ui["ligand-select"].value || null);
@@ -152,10 +151,12 @@ async function fetchPdb(pdbId = ui["pdb-id-input"].value) {
   setInputBusy(true);
   setStatus(`Loading ${id}.`);
   try {
-    const response = await fetch(`https://files.rcsb.org/download/${encodeURIComponent(id)}.pdb1`);
+    const response = await fetch(`https://files.rcsb.org/download/${encodeURIComponent(id)}-assembly1.cif`);
     if (!response.ok) throw new Error(`PDB ${id} could not be loaded (${response.status}).`);
     ui["pdb-id-input"].value = id;
-    return await preparePdb(await response.text(), `${id}-assembly1.pdb`);
+    const deposited = await fetch(`https://files.rcsb.org/download/${encodeURIComponent(id)}.cif`);
+    if (!deposited.ok) throw new Error(`PDB ${id} connectivity could not be loaded (${deposited.status}).`);
+    return await preparePdb(await response.text(), `${id}-assembly1.cif`, await deposited.text());
   } finally {
     setInputBusy(false);
   }

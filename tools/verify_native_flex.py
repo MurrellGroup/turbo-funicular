@@ -25,8 +25,10 @@ def arguments() -> argparse.Namespace:
 def main() -> None:
     args = arguments()
     sys.path.insert(0, str(args.ckdock))
-    from docking.model import EndpointDockingCKModel, ModelConfig, make_bond_pair_features
-    from docking.schema import AtomRole
+    from wsfmdock.model import EndpointDockingCKModel, ModelConfig, make_bond_pair_features
+    from wsfmdock.schema import AtomRole
+    import wsfmdock.model as model_module
+    model_module.flex_attention = torch.compile(model_module.flex_attention, fullgraph=True)
 
     sample = json.loads(args.sample.read_text())
     fixture = json.loads(args.fixture.read_text())
@@ -124,4 +126,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

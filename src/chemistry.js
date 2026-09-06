@@ -146,3 +146,20 @@ export function graphFromSmiles(rdkit, smiles) {
 }
 
 export { connectedComponents };
+
+export function orderObservedGraph(rdkit, atoms, bonds) {
+  // Explicit zero implicit-H counts match the deposited-fragment rank contract.
+  const json = { rdkitjson: { version: 12 }, defaults: { atom: { z: 6, impHs: 0,
+    chg: 0, nRad: 0, isotope: 0, stereo: 'unspecified' },
+    bond: { bo: 1, stereo: 'unspecified' } }, molecules: [{
+    atoms: atoms.map(a => ({ z: a.atomicNumber, chg: a.charge ?? 0, impHs: 0 })),
+    bonds: bonds.map(b => ({ atoms: [b.left, b.right], bo: b.type === 3 ? 1 : b.type + 1 })),
+    extensions: [{ name: 'rdkitRepresentation', formatVersion: 2, toolkitVersion: '2025.03.4',
+      aromaticAtoms: [...new Set(bonds.filter(b => b.type === 3).flatMap(b => [b.left, b.right]))],
+      aromaticBonds: bonds.flatMap((b, i) => b.type === 3 ? [i] : []) }],
+  }] };
+  const mol = rdkit.get_mol(JSON.stringify(json), JSON.stringify({ sanitize: false, removeHs: false }));
+  if (!mol) throw new Error('Cannot rank the deposited molecular graph.');
+  try { return canonicalGraphOrder(mol, bonds, atoms.length); }
+  finally { mol.delete(); }
+}

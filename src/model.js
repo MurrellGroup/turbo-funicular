@@ -67,6 +67,7 @@ class SampleBuffers {
 export class DockingWebGpuModel {
   static async create(device, manifestUrl = "/assets/model/manifest.json", suppliedManifest = null) {
     const manifest = suppliedManifest ?? await fetch(manifestUrl).then((response) => response.json());
+    if (manifest.format !== "wsfmdock_webgpu_v6") throw new Error("Unsupported model export.");
     const [weights, kernels] = await Promise.all([
       WeightStore.load(device, manifestUrl, manifest),
       Kernels.create(device, manifest.activation_precision),
@@ -185,7 +186,7 @@ export class DockingWebGpuModel {
       for (let axis = 0; axis < 3; axis += 1) {
         const index = atom * 3 + axis;
         coords[index] = sample.coordinate_design[atom]
-          ? sample.base_means[atom][axis] + sample.base_scales[atom] * gaussian(rng)
+          ? sample.base_means[atom][axis] + sample.initial_scales[atom] * gaussian(rng)
           : sample.target_coords[atom][axis];
       }
     }
@@ -353,7 +354,7 @@ export class DockingWebGpuModel {
       if (block === this.weights.manifest.finite_start_block) {
         this.kernels.dispatch(pass, "copyF16", [current, b.sharedNode], groups(n * d));
       }
-      this.runBlock(pass, current, other, b.localCondition, endpoint, `local.blocks.${block}`, block === 0);
+      this.runBlock(pass, current, other, b.localCondition, endpoint, `local.blocks.${block}`, true);
       if (block >= this.weights.manifest.finite_start_block) {
         const branch = block - this.weights.manifest.finite_start_block;
         this.kernels.dispatch(pass, "copyF16", [current, b.branchNodes[branch]], groups(n * d));
@@ -402,7 +403,7 @@ export class DockingWebGpuModel {
       this.matmul(pass, b.branchNodes[block], `finite.lateral_adapters.${block}`, b.deltaNode, n, d, d);
       this.kernels.dispatch(pass, "addF16", [current, b.deltaNode, other], groups(n * d));
       [current, other] = [other, current];
-      this.runBlock(pass, current, other, b.finiteCondition, b.secant, `finite.blocks.${block}`, false);
+      this.runBlock(pass, current, other, b.finiteCondition, b.secant, `finite.blocks.${block}`, true);
       if (block === 0 || block === 2 || block === 4) {
         this.matmul(pass, current, `finite.endpoint_updates.${finiteUpdate}`, b.endpointDelta, n, 3, d);
         this.kernels.dispatch(

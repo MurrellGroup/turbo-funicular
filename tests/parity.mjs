@@ -2,11 +2,11 @@ import { chromium } from "playwright";
 import { readFile } from "node:fs/promises";
 
 const fixture = JSON.parse(await readFile(
-  new URL("../public/assets/parity/transition.json", import.meta.url),
+  new URL(`../public/assets/parity/${process.env.PARITY_PREFIX ?? ''}transition.json`, import.meta.url),
   "utf8",
 ));
 const trajectory = JSON.parse(await readFile(
-  new URL("../public/assets/parity/trajectory.json", import.meta.url),
+  new URL(`../public/assets/parity/${process.env.PARITY_PREFIX ?? ''}trajectory.json`, import.meta.url),
   "utf8",
 ));
 
@@ -38,7 +38,8 @@ try {
   await page.evaluate(() => window.__wsfmdock.ready);
   const result = await page.evaluate(async ({ fixture, trajectory }) => {
     const model = window.__wsfmdock.model;
-    const sample = window.__wsfmdock.sample;
+    const sample = await fetch(`/assets/samples/${fixture.sample_file}`).then(r => r.json());
+    await model.setSample(sample);
     const metrics = (actual, expected, movingOnly) => {
       let sum = 0;
       let reference = 0;

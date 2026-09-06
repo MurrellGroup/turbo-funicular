@@ -22,7 +22,9 @@ test("PDB preparation matches the model input contract", () => {
   assert.deepEqual([...new Set(sample.entity_ids.slice(0, 9))], [0]);
   assert.deepEqual([...new Set(sample.entity_ids.slice(9))], [1]);
   assert.equal(sample.ligand_bonds.length, 6);
-  assert.equal(sample.neighbors.filter(([atom]) => atom >= 0).length, 12);
+  assert.equal(sample.neighbors.filter(([atom]) => atom >= 0).length, 26);
+  assert.ok(sample.initial_scales.slice(9).every(v => v === 10));
+  assert.ok(sample.base_scales.slice(9).every(v => v === 1));
   assert.equal(sample.neighbors.filter(([, type]) => type === 3).length, 12);
   assert.equal(sample.graph_source, "RCSB CCD graph");
   const proteinMean = sample.target_coords.slice(0, 9).reduce(
@@ -43,7 +45,7 @@ test("PDB ligands without an authoritative graph are rejected", () => {
 test("explicit LINK records add protein-ligand bonds without geometry inference", () => {
   const structure = parsePdb(miniPdb({ includeLink: true }), "linked.pdb");
   const sample = preparePdbSample(structure, structure.defaultLigandId, new Map([["BEN", benGraph]]));
-  assert.equal(sample.neighbors.filter(([atom]) => atom >= 0).length, 14);
+  assert.equal(sample.neighbors.filter(([atom]) => atom >= 0).length, 28);
   assert.equal(sample.ligand_bonds.length, 7);
   assert.equal(sample.graph_source, "RCSB CCD graph plus explicit PDB links");
 });
@@ -59,7 +61,7 @@ test("RDKit SMILES replacement emits an exact heavy-atom graph", () => {
   validateSample(sample, 8192);
   assert.equal(sample.atoms, 22);
   assert.equal(sample.roles.filter((role) => role === 3).length, 13);
-  assert.equal(sample.neighbors.filter(([atom]) => atom >= 0).length, 26);
+  assert.equal(sample.neighbors.filter(([atom]) => atom >= 0).length, 40);
 });
 
 test("equivalent PDB/CCD and SMILES inputs produce identical conditioning tensors", () => {

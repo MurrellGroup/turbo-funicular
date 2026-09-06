@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export unbatched legacy Plinder examples for browser inference."""
+"""Export unbatched examples for browser inference."""
 
 from __future__ import annotations
 
@@ -14,8 +14,11 @@ import numpy as np
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ckdock", type=Path, required=True)
-    parser.add_argument("--plinder-data", type=Path, required=True)
-    parser.add_argument("--plinder-graphs", type=Path, required=True)
+    parser.add_argument("--plinder-data", type=Path)
+    parser.add_argument("--plinder-graphs", type=Path)
+    parser.add_argument("--glycan-store", type=Path, action='append')
+    parser.add_argument("--glycan-kind", choices=('attached', 'free'), default='attached')
+    parser.add_argument("--append", action='store_true')
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--records", nargs="+", type=int, default=(19206, 11668, 424))
     return parser.parse_args()
@@ -24,17 +27,20 @@ def arguments() -> argparse.Namespace:
 def main() -> None:
     args = arguments()
     sys.path.insert(0, str(args.ckdock))
-    sys.path.insert(0, str(args.ckdock / "docking_viz"))
-    from docking.data import PlinderSource
-    from docking.schema import AtomRole
+    sys.path.insert(0, str(args.ckdock / "viz"))
+    from wsfmdock.data import PlinderSource, GlycanSource, GlycanCatalog
+    from wsfmdock.schema import AtomRole
+    from wsfmdock.protein_graph import add_protein_intraresidue_bonds
     from export_instantaneous import display_topology, residue_ids
 
-    source = PlinderSource(args.plinder_data, args.plinder_graphs, 8192)
+    source = (GlycanSource(GlycanCatalog(tuple(args.glycan_store)), args.glycan_kind)
+              if args.glycan_store else PlinderSource(args.plinder_data, args.plinder_graphs, 32768))
+    source_name = f'glycan-{args.glycan_kind}' if args.glycan_store else 'plinder'
     args.output.mkdir(parents=True, exist_ok=True)
-    catalog = []
-    labels = ("Compact pocket", "Medium pocket", "Large pocket")
-    for label, record_index in zip(labels, args.records, strict=True):
-        record = source.load(record_index)
+    catalog = json.loads((args.output / 'catalog.json').read_text())['samples'] if args.append else []
+    for record_index in args.records:
+        record = add_protein_intraresidue_bonds(source.catalog.load(source.kind, record_index)
+                                               if args.glycan_store else source.load(record_index))
         atoms = len(record.coords)
         degree = np.zeros(atoms, dtype=np.int32)
         neighbors = np.full((atoms, 10, 2), -1, dtype=np.int32)
@@ -56,14 +62,15 @@ def main() -> None:
         residues = residue_ids(record)
         payload = {
             "format": "wsfmdock_webgpu_sample_v1",
-            "id": f"plinder-{record_index}",
-            "label": f"{label} / Plinder {record_index}",
-            "source": "plinder",
+            "id": f"{source_name}-{record_index}",
+            "label": f"{source_name} {record_index}",
+            "source": source_name,
             "source_index": record_index,
             "atoms": atoms,
             "target_coords": record.coords.astype(float).tolist(),
             "base_means": record.base_means.astype(float).tolist(),
             "base_scales": scales.astype(float).tolist(),
+            "initial_scales": np.where(molecule | ligand, 10, scales).astype(float).tolist(),
             "atomic_numbers": record.atomic_numbers.astype(int).tolist(),
             "roles": record.roles.astype(int).tolist(),
             "residue_types": record.residue_types.astype(int).tolist(),
@@ -74,7 +81,8 @@ def main() -> None:
             "residue_ids": residues.astype(int).tolist(),
             **display_topology(record, residues),
         }
-        filename = f"plinder-{record_index}.json"
+        payload['backbone_trace_pairs'] = payload['backbone_bonds']
+        filename = f"{source_name}-{record_index}.json"
         (args.output / filename).write_text(json.dumps(payload, separators=(",", ":")) + "\n")
         catalog.append({"id": payload["id"], "label": payload["label"], "atoms": atoms, "file": filename})
     (args.output / "catalog.json").write_text(json.dumps({"samples": catalog}, indent=2) + "\n")
@@ -83,4 +91,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

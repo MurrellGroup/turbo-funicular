@@ -94,7 +94,7 @@ function fullBackbonePairs(sample) {
 function groupedAtoms(sample, role) {
   const groups = new Map();
   for (let atom = 0; atom < sample.atoms; atom += 1) {
-    if (sample.roles[atom] !== role) continue;
+    if (sample.roles[atom] !== role && !(role === ROLE_LIGAND && sample.roles[atom] === 0)) continue;
     const element = sample.atomic_numbers[atom];
     if (!groups.has(element)) groups.set(element, []);
     groups.get(element).push(atom);
@@ -163,7 +163,8 @@ export class MolecularViewer {
     }));
     this.sideAtoms = new THREE.InstancedMesh(sphere, material(0x52bca8, 0.84), sample.roles.filter((role) => role === ROLE_SIDECHAIN).length);
     this.sideBonds = new THREE.InstancedMesh(cylinder, material(0x3e9e8d, 0.76), sample.sidechain_bonds.length);
-    this.ligandBonds = new THREE.InstancedMesh(cylinder, material(0xd65358), sample.ligand_bonds.length);
+    this.moleculePairs = [...sample.ligand_bonds, ...sample.molecule_bonds];
+    this.ligandBonds = new THREE.InstancedMesh(cylinder, material(0xd65358), this.moleculePairs.length);
     this.ligandByElement = groupedAtoms(sample, ROLE_LIGAND);
     this.ligandMeshes = [...this.ligandByElement].map(([element, atoms]) => ({
       element,
@@ -173,14 +174,14 @@ export class MolecularViewer {
     this.referenceGroup = new THREE.Group();
     this.referenceGroup.visible = this.referenceVisible;
     this.referenceAtoms = sample.roles.flatMap(
-      (role, atom) => role === ROLE_SIDECHAIN || role === ROLE_LIGAND ? [atom] : [],
+      (role, atom) => role === ROLE_SIDECHAIN || role === ROLE_LIGAND || role === 0 ? [atom] : [],
     );
     this.referenceAtomMesh = new THREE.InstancedMesh(
       sphere,
       material(0xf0bd68, 0.2),
       this.referenceAtoms.length,
     );
-    this.referencePairs = [...sample.sidechain_bonds, ...sample.ligand_bonds];
+    this.referencePairs = [...sample.sidechain_bonds, ...this.moleculePairs];
     this.referenceBondMesh = new THREE.InstancedMesh(
       cylinder,
       material(0xdca85e, 0.16),
@@ -247,7 +248,7 @@ export class MolecularViewer {
     this.sideBonds.count = cursor;
     this.sideBonds.instanceMatrix.needsUpdate = true;
     cursor = 0;
-    for (const [first, second] of this.sample.ligand_bonds) {
+    for (const [first, second] of this.moleculePairs) {
       if (bondMatrix(this.ligandBonds, cursor, coords, first, second, 0.068)) cursor += 1;
     }
     this.ligandBonds.count = cursor;

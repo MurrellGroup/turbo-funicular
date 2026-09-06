@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert the legacy CKDock EMA checkpoint to browser-oriented FP16 tensors."""
+"""Export browser tensors from a supported checkpoint."""
 
 from __future__ import annotations
 
@@ -34,6 +34,8 @@ class Writer:
             self.payload.append(0)
         dtype = "<f2" if self.precision == "float16" else "<f4"
         value = tensor.detach().cpu().float().contiguous().numpy().astype(dtype)
+        if not np.isfinite(value).all():
+            raise ValueError(f"nonfinite exported tensor: {name}")
         offset = len(self.payload)
         encoded = value.tobytes(order="C")
         self.payload.extend(encoded)
@@ -94,8 +96,7 @@ def export_block(
     pair_bias = torch.zeros(heads, 5, dtype=torch.float32)
     pair_bias[:, 0] = state[f"{source}.attention.different_entity_bias"]
     bond_name = f"{source}.attention.bond_pair_bias"
-    if bond_name in state:
-        pair_bias[:, 1:] = state[bond_name]
+    pair_bias[:, 1:] = state[bond_name]
     writer.add(f"{target}.attention.pair_bias", pair_bias)
     writer.add(f"{target}.attention.output", state[f"{source}.attention.output.weight"])
     export_adaln(writer, state, f"{source}.ffn_norm", f"{target}.ffn_norm")
@@ -110,11 +111,20 @@ def main() -> None:
     args = arguments()
     checkpoint_bytes = args.checkpoint.read_bytes()
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    expected = "continuous_docking_pairgraph_secant_x1_ck_v3"
+    expected = "continuous_docking_pairgraph_allblock_secant_x1_ck_v6"
     if checkpoint.get("method") != expected or checkpoint.get("stage") != "ck":
-        raise ValueError("checkpoint is not the legacy pairgraph-v3 CK model")
+        raise ValueError("unsupported checkpoint method or stage")
     state = checkpoint["ema"]
     config = checkpoint["model_config"]
+    required = dict(dim=408, depth=12, heads=12, scalar_head_dim=34,
+                    query_points=6, point_values=10, ff_hidden_dim=2040,
+                    endpoint_update_layers=3, endpoint_update_stride=2, ck_suffix_layers=5,
+                    a_e=1.0, rope_base=1000.0)
+    for key, value in required.items():
+        if config.get(key) != value:
+            raise ValueError(f"unsupported {key}: {config.get(key)}")
+    if checkpoint.get('dataset_signature', {}).get('molecule_initial_std') != 10.0:
+        raise ValueError('unsupported initial distribution')
     writer = Writer(args.precision)
     writer.add(
         "local.embedding",
@@ -150,7 +160,7 @@ def main() -> None:
     weights_path = args.output / f"weights.{suffix}"
     weights_path.write_bytes(writer.payload)
     manifest = {
-        "format": "wsfmdock_webgpu_v1",
+        "format": "wsfmdock_webgpu_v6",
         "method": checkpoint["method"],
         "stage": checkpoint["stage"],
         "iteration": int(checkpoint["iteration"]),
@@ -164,8 +174,8 @@ def main() -> None:
         "embedding_offsets": {"atomic": 0, "role": 128, "residue": 133, "atom_name": 154},
         "endpoint_block_indices": [7, 9, 11],
         "finite_start_block": 7,
-        "legacy_pair_blocks": ["local.blocks.0"],
-        "time_frequencies": state["local.time_features.weight"].tolist(),
+        "sampling": {"initial_molecule_scale": 10.0, "process_molecule_scale": 1.0,
+                     "sidechain_scale": 0.5},
         "time_frequencies": state["local.time_features.weight"].tolist(),
         "tensors": writer.entries,
     }

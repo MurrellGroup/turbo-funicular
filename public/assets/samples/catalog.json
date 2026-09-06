@@ -2,21 +2,33 @@
   "samples": [
     {
       "id": "plinder-19206",
-      "label": "Compact pocket / Plinder 19206",
-      "atoms": 295,
+      "label": "plinder 19206",
+      "atoms": 5059,
       "file": "plinder-19206.json"
     },
     {
       "id": "plinder-11668",
-      "label": "Medium pocket / Plinder 11668",
-      "atoms": 456,
+      "label": "plinder 11668",
+      "atoms": 6135,
       "file": "plinder-11668.json"
     },
     {
       "id": "plinder-424",
-      "label": "Large pocket / Plinder 424",
-      "atoms": 702,
+      "label": "plinder 424",
+      "atoms": 1803,
       "file": "plinder-424.json"
+    },
+    {
+      "id": "glycan-attached-5",
+      "label": "glycan-attached 5",
+      "atoms": 2392,
+      "file": "glycan-attached-5.json"
+    },
+    {
+      "id": "glycan-free-100",
+      "label": "glycan-free 100",
+      "atoms": 19,
+      "file": "glycan-free-100.json"
     }
   ]
 }

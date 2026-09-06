@@ -73,11 +73,20 @@ function isControlToken(token) {
     || lower.startsWith("save_");
 }
 
-function cifLoops(text) {
+export function cifLoops(text) {
   const tokens = tokenizeCif(text);
   const loops = [];
+  const single = new Map();
   for (let index = 0; index < tokens.length;) {
     if (tokens[index].toLowerCase() !== "loop_") {
+      if (tokens[index].startsWith("_") && index + 1 < tokens.length) {
+        const key = tokens[index++].toLowerCase();
+        const category = key.split('.')[0];
+        if (!single.has(category)) single.set(category, { headers: [], rows: [[]] });
+        const entry = single.get(category);
+        entry.headers.push(key);
+        entry.rows[0].push(tokens[index]);
+      }
       index += 1;
       continue;
     }
@@ -96,7 +105,7 @@ function cifLoops(text) {
     }
     loops.push({ headers, rows });
   }
-  return loops;
+  return [...loops, ...single.values()];
 }
 
 function column(loop, name) {
@@ -110,6 +119,7 @@ export function parseCcdGraph(text, requestedId) {
   let atoms;
   let bonds;
   const smiles = [];
+  const glycan = /saccharide/i.test(text.match(/_chem_comp\.type\s+([^\n]+)/i)?.[1] ?? "");
   for (const loop of cifLoops(text)) {
     if (loop.headers.includes("_chem_comp_atom.atom_id")) {
       const idColumn = column(loop, "_chem_comp_atom.comp_id");
@@ -117,7 +127,10 @@ export function parseCcdGraph(text, requestedId) {
       const elementColumn = column(loop, "_chem_comp_atom.type_symbol");
       atoms = loop.rows
         .filter((row) => row[idColumn].toUpperCase() === componentId)
-        .map((row) => ({ name: row[nameColumn].toUpperCase(), element: row[elementColumn].toUpperCase() }));
+        .map((row) => ({ name: row[nameColumn].toUpperCase(), element: row[elementColumn].toUpperCase(),
+          charge: Number(row[loop.headers.indexOf('_chem_comp_atom.charge')] ?? 0),
+          atomicNumber: ELEMENT_NUMBER.get(row[elementColumn].toUpperCase()),
+        }));
     }
     if (loop.headers.includes("_chem_comp_bond.atom_id_1")) {
       const idColumn = column(loop, "_chem_comp_bond.comp_id");
@@ -130,7 +143,7 @@ export function parseCcdGraph(text, requestedId) {
         .map((row) => {
           const order = row[orderColumn].toUpperCase();
           const aromatic = row[aromaticColumn].toUpperCase() === "Y";
-          const type = aromatic || order === "AROM" || order === "DELO" ? 3 : ORDER.get(order);
+          const type = aromatic || order === "AROM" ? 3 : ORDER.get(order);
           if (type === undefined) throw new Error(`CCD ${componentId} has unsupported bond order ${order}.`);
           return {
             first: row[firstColumn].toUpperCase(),
@@ -163,7 +176,7 @@ export function parseCcdGraph(text, requestedId) {
     Number(right.canonical) - Number(left.canonical)
     || Number(right.program === "CACTVS") - Number(left.program === "CACTVS")
   ));
-  return { componentId, atoms, bonds, smiles: smiles.map((entry) => entry.value) };
+  return { componentId, atoms, bonds, glycan, smiles: smiles.map((entry) => entry.value) };
 }
 
 function adjacency(atoms, bonds) {
@@ -283,7 +296,9 @@ export async function loadCcdGraphs(componentIds, rdkit) {
   const entries = await Promise.all(ids.map(async (id) => {
     if (!cache.has(id)) cache.set(id, fetchCcdGraph(id));
     try {
-      return [id, trainingGraphFromCcd(rdkit, await cache.get(id))];
+      const raw = await cache.get(id);
+      return [id, raw.glycan ? { ...raw, atoms: raw.atoms.filter(a => a.atomicNumber > 1) }
+        : { ...trainingGraphFromCcd(rdkit, raw), glycan: false }];
     } catch {
       cache.delete(id);
       return [id, null];

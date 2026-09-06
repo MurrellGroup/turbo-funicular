@@ -7,6 +7,8 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "test:prep": "node --test tests/prep.mjs",
+    "test:assembly": "node tests/assembly.mjs",
+    "test:glycan": "node tests/browser_glycan.mjs",
     "test:browser": "node tests/parity.mjs",
     "test:custom": "node tests/custom_input.mjs",
     "test:graph": "node tests/graph_sensitivity.mjs"

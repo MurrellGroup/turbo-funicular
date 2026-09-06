@@ -1,4 +1,4 @@
-const REMOTE_MODEL_MANIFEST = "https://huggingface.co/murrellb/WSFMDocking/resolve/main/webgpu/post_joint_100k/manifest.json";
+const REMOTE_MODEL_MANIFEST = "https://huggingface.co/murrellb/WSFMDocking/resolve/main/webgpu/ck_135000/manifest.json";
 
 const localBase = new URL(import.meta.env.BASE_URL, document.baseURI);
 
