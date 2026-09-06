@@ -92,7 +92,8 @@ export class DockingWebGpuModel {
       device.limits.maxStorageBufferBindingSize,
       device.limits.maxBufferSize,
     );
-    this.maximumAtoms = Math.floor(bufferLimit / largestPerAtomBuffer);
+    this.maximumAtoms = Math.min(Math.floor(bufferLimit / largestPerAtomBuffer),
+      device.limits.maxComputeWorkgroupsPerDimension);
     this.sampleBuffers = null;
     this.buffers = null;
     this.currentCoords = null;

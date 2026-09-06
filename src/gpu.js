@@ -621,6 +621,12 @@ export class Kernels {
     };
     const pipelines = {};
     await Promise.all(Object.entries(definitions).map(async ([name, source]) => {
+      // Flatten large elementwise dispatches across two workgroup dimensions.
+      if (source.includes('@builtin(global_invocation_id) global')) {
+        source = source.replace('@builtin(global_invocation_id) global: vec3<u32>',
+          '@builtin(global_invocation_id) global: vec3<u32>, @builtin(num_workgroups) grid: vec3<u32>')
+          .replaceAll('global.x', '(global.x + global.y * grid.x * 256u)');
+      }
       const code = precision === "float16"
         ? source
         : source.replaceAll("enable f16;", "").replaceAll("f16", "f32");
@@ -665,7 +671,10 @@ export class Kernels {
     const group = this.device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries });
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, group);
-    pass.dispatchWorkgroups(...groups);
+    if (groups.length === 1 && groups[0] > this.device.limits.maxComputeWorkgroupsPerDimension) {
+      const width = this.device.limits.maxComputeWorkgroupsPerDimension;
+      pass.dispatchWorkgroups(width, Math.ceil(groups[0] / width));
+    } else pass.dispatchWorkgroups(...groups);
   }
 }
 

@@ -51,6 +51,8 @@ try {
   await page.click("#custom-tab");
   await page.fill("#pdb-id-input", "8BO9");
   await page.click("#fetch-pdb");
+  await page.waitForFunction(() => document.querySelector('#prepare-selection').disabled === false);
+  await page.click('#prepare-selection');
   await page.waitForFunction(() => window.__wsfmdock.sample?.id === "pdb-8BO9-assembly1.cif");
   const fetched = await page.evaluate(() => ({
     atoms: window.__wsfmdock.sample.atoms,
@@ -96,6 +98,7 @@ try {
     return [...await window.__wsfmdock.model.coordinates()];
   });
   await page.evaluate((smiles) => window.__wsfmdock.replaceLigand(smiles), NSW_SMILES);
+  await page.evaluate(() => window.__wsfmdock.useSelection());
   await page.waitForFunction(() => window.__wsfmdock.sample?.id.endsWith("-smiles"));
   const smilesConditioning = await page.evaluate(() => {
     const sample = window.__wsfmdock.sample;
@@ -126,6 +129,8 @@ try {
     mimeType: "chemical/x-pdb",
     buffer: Buffer.from(miniPdb()),
   });
+  await page.waitForFunction(() => window.__wsfmdock.viewer.sample?.id === 'preview-mini.pdb');
+  await page.evaluate(() => window.__wsfmdock.useSelection());
   await page.waitForFunction(() => window.__wsfmdock.sample?.id === "pdb-mini.pdb");
   const pdb = await page.evaluate(() => ({
     atoms: window.__wsfmdock.sample.atoms,
@@ -143,6 +148,11 @@ try {
 
   await page.evaluate(async (pdbText) => {
     await window.__wsfmdock.loadPdbText(pdbText, "unknown.pdb");
+    try { await window.__wsfmdock.useSelection(); throw new Error('Unexpected graph acceptance'); }
+    catch (error) { if (!error.message.includes('authoritative graph')) throw error; }
+    const input = document.querySelector('#ligand-list input');
+    input.checked = false; input.dispatchEvent(new Event('change'));
+    await window.__wsfmdock.useSelection();
   }, miniPdb({ component: "@@@" }));
   await page.waitForFunction(() => window.__wsfmdock.sample?.id === "pdb-unknown.pdb");
   const unavailable = await page.evaluate(() => ({
@@ -152,12 +162,13 @@ try {
   }));
   if (unavailable.atoms !== 9
     || unavailable.ligandAtoms !== 0
-    || !unavailable.status.includes("replacement SMILES")) {
+    || unavailable.status !== 'Ready') {
     throw new Error(`Unavailable-graph fallback differs: ${JSON.stringify(unavailable)}`);
   }
 
   await page.evaluate(async (pdbText) => {
     await window.__wsfmdock.loadPdbText(pdbText, "mini.pdb");
+    await window.__wsfmdock.useSelection();
   }, miniPdb());
   await page.waitForFunction(() => window.__wsfmdock.sample?.id === "pdb-mini.pdb");
   const rendering = await page.evaluate(() => ({
@@ -171,6 +182,8 @@ try {
 
   await page.fill("#smiles-input", "CC(=O)Oc1ccccc1C(=O)O");
   await page.click("#replace-ligand");
+  await page.waitForFunction(() => document.querySelector('#prepare-selection').disabled === false);
+  await page.evaluate(() => window.__wsfmdock.useSelection());
   await page.waitForFunction(() => window.__wsfmdock.sample?.id.endsWith("-smiles"));
   const smiles = await page.evaluate(() => ({
     atoms: window.__wsfmdock.sample.atoms,

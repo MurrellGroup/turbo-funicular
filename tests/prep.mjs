@@ -6,6 +6,7 @@ import { parseCcdGraph, trainingGraphFromCcd } from "../src/ccd.js";
 import { graphFromSmiles } from "../src/chemistry.js";
 import { GraphUnavailableError, parsePdb, preparePdbSample, replaceLigand } from "../src/prep.js";
 import { validateSample } from "../src/sample.js";
+import { structureChoices, selectedStructure, previewStructure } from '../src/selection.js';
 import { miniCcd, miniPdb } from "./fixtures.mjs";
 
 const rdkit = await initRDKitModule();
@@ -80,4 +81,35 @@ test("explicit SMILES hydrogens are removed", () => {
   const graph = graphFromSmiles(rdkit, "[H]O[H]");
   assert.deepEqual(graph.atomicNumbers, [8]);
   assert.equal(graph.bonds.length, 0);
+});
+
+test('multiple ligands survive an item-specific replacement', () => {
+  const structure = parsePdb(miniPdb());
+  const second = structuredClone(structure.ligandOptions[0]);
+  second.id = 'second';
+  for (const atom of second.atoms) {
+    atom.chain = 'Z'; atom.residueKey = `Z|${atom.residueNumber}|`;
+    atom.serial += 100; atom.coord[0] += 20;
+  }
+  structure.ligandOptions.push(second);
+  const choices = structureChoices(structure);
+  assert.equal(choices.ligands.length, 2);
+  assert.equal(previewStructure(structure).atoms, 21);
+  const full = preparePdbSample(structure, '__all__', new Map([['BEN', benGraph]]));
+  const replaced = replaceLigand(full, graphFromSmiles(rdkit, 'CCO'), new Set([full.entity_ids.at(-1)]));
+  validateSample(replaced);
+  assert.equal(replaced.roles.filter(r => r === 3).length, 9);
+  assert.equal(replaced.ligand_bonds.length, 8);
+  for (let i = 0; i < 15; i++) {
+    const edges = sample => sample.neighbors.slice(i * 10, i * 10 + 10).filter(([j]) => j >= 0).sort((a,b) => a[0]-b[0]);
+    assert.deepEqual(edges(replaced), edges(full));
+  }
+});
+
+test('selection refuses a dangling protein attachment', () => {
+  const structure = parsePdb(miniPdb({ includeLink: true }));
+  const choices = structureChoices(structure);
+  assert.equal(choices.ligands[0].chains.size, 1);
+  assert.throws(() => selectedStructure(structure, choices, new Set(), new Set([choices.ligands[0].id])), /attached/);
+  assert.equal(previewStructure(selectedStructure(structure, choices, new Set(), new Set())).atoms, 0);
 });

@@ -41,12 +41,12 @@
             <button id="fetch-pdb" class="secondary source-command" type="button" disabled>Load</button>
           </div>
           <button id="open-pdb" class="secondary source-command" type="button" disabled>Open PDB</button>
-          <label>
-            PDB ligand
-            <select id="ligand-select" disabled>
-              <option>No PDB loaded</option>
-            </select>
-          </label>
+          <fieldset class="structure-choices"><legend>Protein chains</legend><div class="choice-actions"><button id="chains-all" type="button">All</button><button id="chains-none" type="button">None</button></div><div id="chain-list"></div></fieldset>
+          <fieldset class="structure-choices"><legend>Ligands</legend><div class="choice-actions"><button id="ligands-all" type="button">All</button><button id="ligands-none" type="button">None</button></div><div id="ligand-list"></div></fieldset>
+          <p id="selection-count" class="structure-label">No structure loaded</p>
+          <button id="prepare-selection" type="button" disabled>Use selection</button>
+          <label>Active ligand<select id="active-ligand" disabled></select></label>
+          <button id="remove-ligand" class="secondary" type="button" disabled>Remove ligand</button>
           <label>
             Replacement SMILES
             <input id="smiles-input" type="text" value="CC(=O)Oc1ccccc1C(=O)O" spellcheck="false" autocomplete="off" />

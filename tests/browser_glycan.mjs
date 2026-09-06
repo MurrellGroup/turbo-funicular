@@ -30,7 +30,13 @@ try {
   await page.evaluate(() => window.__wsfmdock.ready);
   assert.equal(await page.evaluate(() => window.__wsfmdock.model.weights.manifest.iteration), 135000);
   const prepared = await page.evaluate(async () => {
-    const sample = await window.__wsfmdock.fetchPdb('4BYH');
+    await window.__wsfmdock.fetchPdb('4BYH');
+    const ids = [...document.querySelectorAll('#ligand-list input')].slice(1).map(i => i.value);
+    for (const id of ids) {
+      const input = [...document.querySelectorAll('#ligand-list input')].find(i => i.value === id);
+      input.checked = false; input.dispatchEvent(new Event('change'));
+    }
+    const sample = await window.__wsfmdock.useSelection();
     const attachments = sample.ligand_bonds.filter(([a, b]) => (sample.roles[a] === 3) !== (sample.roles[b] === 3));
     document.getElementById('step-select').value = '4';
     const initial = [...await window.__wsfmdock.model.coordinates()];

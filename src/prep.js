@@ -504,8 +504,9 @@ export function preparePdbSample(
   return result;
 }
 
-export function replaceLigand(sample, graph) {
-  const keep = sample.roles.map((role, atom) => role === ROLE_BACKBONE || role === ROLE_SIDECHAIN ? atom : -1).filter((atom) => atom >= 0);
+export function replaceLigand(sample, graph, removedEntities = null) {
+  const keep = sample.roles.map((role, atom) => (role === ROLE_BACKBONE || role === ROLE_SIDECHAIN
+    || (removedEntities && !removedEntities.has(sample.entity_ids[atom]))) ? atom : -1).filter((atom) => atom >= 0);
   const inverse = new Int32Array(sample.atoms).fill(-1);
   keep.forEach((atom, index) => { inverse[atom] = index; });
   const pick = (name) => keep.map((atom) => sample[name][atom]);
@@ -518,12 +519,13 @@ export function replaceLigand(sample, graph) {
   const entityIds = pick("entity_ids");
   const residueIds = pick("residue_ids");
   const ligandOffset = keep.length;
+  const hasProtein = roles.some(role => role === ROLE_BACKBONE || role === ROLE_SIDECHAIN);
   const proteinEntityMaximum = entityIds.length ? Math.max(...entityIds) : 0;
   for (let atom = 0; atom < graph.atomicNumbers.length; atom += 1) {
     coords.push(graph.coordinates[atom]);
     baseMeans.push([0, 0, 0]);
     atomicNumbers.push(graph.atomicNumbers[atom]);
-    roles.push(keep.length ? ROLE_LIGAND : ROLE_MOLECULE);
+    roles.push(hasProtein ? ROLE_LIGAND : ROLE_MOLECULE);
     residueTypes.push(UNKNOWN_RESIDUE);
     atomNames.push(UNKNOWN_ATOM_NAME);
     entityIds.push(proteinEntityMaximum + 1 + graph.entityIds[atom]);
@@ -542,7 +544,7 @@ export function replaceLigand(sample, graph) {
       if (other > old && inverse[other] >= 0) bonds.push({ left: inverse[old], right: inverse[other], type });
     }
   }
-  return assembleSample({
+  const result = assembleSample({
     id: `${sample.id}-smiles`,
     label: `${sample.label.split(" / ")[0]} / ${graph.canonicalSmiles}`,
     coords,
@@ -558,9 +560,12 @@ export function replaceLigand(sample, graph) {
     topology: {
       backbone_trace_pairs: remapPairs(sample.backbone_trace_pairs),
       sidechain_bonds: remapPairs(sample.sidechain_bonds),
-      ligand_bonds: bonds.filter(b => b.left >= ligandOffset).map(({ left, right }) => [left, right]),
-      molecule_bonds: [],
+      ligand_bonds: bonds.filter(b => roles[b.left] === ROLE_LIGAND || roles[b.right] === ROLE_LIGAND).map(({ left, right }) => [left, right]),
+      molecule_bonds: bonds.filter(b => roles[b.left] === ROLE_MOLECULE && roles[b.right] === ROLE_MOLECULE).map(b => [b.left, b.right]),
     },
     graphSource: `RDKit ${graph.canonicalSmiles}`,
   });
+  result.atom_labels = keep.map(i => sample.atom_labels?.[i] ?? `atom-${i}`)
+    .concat(graph.atomicNumbers.map((_, i) => `replacement-${i}`));
+  return result;
 }

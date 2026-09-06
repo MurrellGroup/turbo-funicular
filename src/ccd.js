@@ -117,7 +117,7 @@ function column(loop, name) {
 export function parseCcdGraph(text, requestedId) {
   const componentId = requestedId.trim().toUpperCase();
   let atoms;
-  let bonds;
+  let bonds = [];
   const smiles = [];
   const glycan = /saccharide/i.test(text.match(/_chem_comp\.type\s+([^\n]+)/i)?.[1] ?? "");
   for (const loop of cifLoops(text)) {

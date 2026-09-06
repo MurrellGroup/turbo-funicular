@@ -103,6 +103,7 @@ function groupedAtoms(sample, role) {
 }
 
 export class MolecularViewer {
+  selectionColor(active) { return new THREE.Color(active ? 0xffb735 : 0xffffff); }
   constructor(container) {
     this.container = container;
     this.scene = new THREE.Scene();
@@ -116,6 +117,20 @@ export class MolecularViewer {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.075;
     this.controls.rotateSpeed = 0.55;
+    const raycaster = new THREE.Raycaster();
+    let pointerStart;
+    this.renderer.domElement.addEventListener('pointerdown', event => { pointerStart = [event.clientX, event.clientY]; });
+    this.renderer.domElement.addEventListener('pointerup', event => {
+      if (!pointerStart || Math.hypot(event.clientX - pointerStart[0], event.clientY - pointerStart[1]) > 4) return;
+      const rect = this.renderer.domElement.getBoundingClientRect();
+      raycaster.setFromCamera(new THREE.Vector2(2 * (event.clientX - rect.left) / rect.width - 1,
+        1 - 2 * (event.clientY - rect.top) / rect.height), this.camera);
+      const hit = raycaster.intersectObjects((this.ligandMeshes ?? []).map(item => item.mesh))[0];
+      if (hit) {
+        const item = this.ligandMeshes.find(item => item.mesh === hit.object);
+        this.onAtomPick?.(item.atoms[hit.instanceId]);
+      }
+    });
     this.scene.add(new THREE.HemisphereLight(0xe7f1ef, 0x24272a, 2.1));
     const key = new THREE.DirectionalLight(0xffffff, 3.1);
     key.position.set(20, 34, 28);
