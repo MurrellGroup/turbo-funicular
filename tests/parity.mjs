@@ -38,7 +38,7 @@ try {
   await page.evaluate(() => window.__wsfmdock.ready);
   const result = await page.evaluate(async ({ fixture, trajectory }) => {
     const model = window.__wsfmdock.model;
-    const sample = await fetch(`/assets/samples/${fixture.sample_file}`).then(r => r.json());
+    const sample = await fetch(new URL(`assets/samples/${fixture.sample_file}`, location.href)).then(r => r.json());
     await model.setSample(sample);
     const metrics = (actual, expected, movingOnly) => {
       let sum = 0;
