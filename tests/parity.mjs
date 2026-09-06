@@ -26,6 +26,14 @@ const browser = await chromium.launch({
 
 try {
   const page = await browser.newPage({ ignoreHTTPSErrors: true });
+  if (process.env.COMPACT_GPU) await page.addInitScript(() => {
+    const request = GPUAdapter.prototype.requestDevice;
+    GPUAdapter.prototype.requestDevice = function (options) {
+      return request.call(this, { ...options, requiredLimits: {
+        ...options.requiredLimits, maxComputeWorkgroupStorageSize: 16384,
+      } });
+    };
+  });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {

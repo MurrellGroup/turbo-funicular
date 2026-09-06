@@ -318,11 +318,13 @@ async function runInference() {
       setStatus(`Running step ${index + 1} of ${steps}.`);
       await new Promise((resolve) => requestAnimationFrame(resolve));
       const noise = model.drawNoise(start, end, rng);
-      const elapsed = await model.transition(start, end, noise.increment, noise.latent);
+      const mapStarted = performance.now();
+      await model.transition(start, end, noise.increment, noise.latent, false);
       const next = await model.coordinates();
+      const elapsed = performance.now() - mapStarted;
       ui["map-time"].textContent = `${elapsed.toFixed(1)} ms`;
       setStatus(`Step ${index + 1} completed in ${elapsed.toFixed(1)} ms.`);
-      await viewer.interpolate(previous, next, Math.min(420, Math.max(160, elapsed * 0.25)));
+      viewer.update(next);
       previous = next;
       ui["progress-bar"].style.width = `${100 * (index + 1) / steps}%`;
     }
@@ -349,9 +351,6 @@ async function initialize() {
   const needsF16 = manifest.activation_precision === "float16";
   if (needsF16 && !adapter.features.has("shader-f16")) {
     throw new Error("This model payload requires WebGPU shader-f16, which the adapter does not expose.");
-  }
-  if (adapter.limits.maxComputeWorkgroupStorageSize < 17968) {
-    throw new Error("This WebGPU adapter has insufficient workgroup storage for tiled point attention.");
   }
   device = await adapter.requestDevice({
     requiredFeatures: needsF16 ? ["shader-f16"] : [],

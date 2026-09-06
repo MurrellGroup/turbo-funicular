@@ -54,17 +54,18 @@ try {
       const ablated = await rollout(noNeighbors);
       model.device.queue.writeBuffer(model.sampleBuffers.neighbors, 0, originalNeighbors);
       const target = new Float32Array(sample.target_coords.flat());
-      const bondMae = (coords) => sample.ligand_bonds.reduce(
+      const bonds = [...sample.ligand_bonds, ...(sample.molecule_bonds ?? [])];
+      const bondMae = (coords) => bonds.reduce(
         (total, [left, right]) => total + Math.abs(
           distance(coords, left, right) - distance(target, left, right)
         ),
         0,
-      ) / sample.ligand_bonds.length;
+      ) / bonds.length;
       let square = 0;
       let maximum = 0;
       let count = 0;
       for (let atom = 0; atom < sample.atoms; atom += 1) {
-        if (sample.roles[atom] !== 3) continue;
+        if (sample.roles[atom] !== 3 && sample.roles[atom] !== 0) continue;
         for (let axis = 0; axis < 3; axis += 1) {
           const index = atom * 3 + axis;
           const difference = conditioned[index] - ablated[index];

@@ -119,6 +119,7 @@ export class DockingWebGpuModel {
 
   async setSample(sample) {
     validateSample(sample, this.maximumAtoms);
+    this.kernels.bindGroups.clear();
     if (this.sampleBuffers) this.sampleBuffers.destroy();
     if (this.buffers) {
       for (const buffer of Object.values(this.buffers).flatMap((value) => Array.isArray(value) ? value : [value])) {
@@ -314,7 +315,7 @@ export class DockingWebGpuModel {
     return current;
   }
 
-  async transition(start, end, increment, latent) {
+  async transition(start, end, increment, latent, wait = true) {
     const b = this.buffers;
     const n = this.sampleBuffers.atoms;
     const d = this.config.dim;
@@ -439,7 +440,7 @@ export class DockingWebGpuModel {
     pass.end();
     const started = performance.now();
     this.device.queue.submit([encoder.finish()]);
-    await this.device.queue.onSubmittedWorkDone();
+    if (wait) await this.device.queue.onSubmittedWorkDone();
     const elapsed = performance.now() - started;
     [this.currentCoords, this.nextCoords] = [this.nextCoords, this.currentCoords];
     return elapsed;
