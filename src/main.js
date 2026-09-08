@@ -7,6 +7,9 @@ import { parsePdb, preparePdbSample, replaceLigand, selectedLigandOptions, atomL
 import { parseMmcif } from './mmcif.js';
 import { loadRdkit } from "./rdkit.js";
 import { structureChoices, selectedStructure, previewStructure } from './selection.js';
+import { SequenceEditor } from './sequence-editor.js';
+import { mutateSample, proteinChains } from './sequence.js';
+import { createIcons, ChevronLeft, ChevronRight, Download, Upload, X } from 'lucide';
 
 const ui = Object.fromEntries([
   "device-dot", "device-label", "sample-select", "step-select", "seed-input",
@@ -16,6 +19,8 @@ const ui = Object.fromEntries([
   "open-pdb", "chain-list", "ligand-list", "selection-count", "prepare-selection", "smiles-input", "replace-ligand", "structure-label",
   "pdb-id-input", "fetch-pdb", "show-reference",
   "active-ligand", "remove-ligand",
+  "campaign-count", "run-campaign", "stop-campaign", "campaign-results", "campaign-result",
+  "previous-result", "next-result", "download-result", "result-identities",
 ].map((id) => [id, document.getElementById(id)]));
 
 const viewer = new MolecularViewer(document.getElementById("viewport"));
@@ -34,7 +39,27 @@ let choices;
 let keptChains = new Set(), keptLigands = new Set();
 let replacements = new Map(), previewGeneration = 0;
 let previewGraphs = new Map();
+let campaign = [], cancelCampaign = false;
+let preparedBase = null;
+const editor = new SequenceEditor({
+  onChange: () => {
+    if (preparedBase) {
+      const preview = mutateSample(preparedBase, editor.edits, Number(ui['seed-input'].value) || 1).sample;
+      viewer.setSample(preview, new Float32Array(preview.target_coords.flat()), true);
+      viewer.highlightResidues(editor.selected); activeHighlight();
+      ui['atom-count'].textContent = preview.atoms.toLocaleString();
+    }
+    setStatus(`${editor.edits.size} residue edits`);
+  },
+  onSelect: ids => viewer.highlightResidues(ids),
+  onError: message => { setStatus(message); document.getElementById('alignment-status').textContent = message; },
+});
+createIcons({ icons: { ChevronLeft, ChevronRight, Download, Upload, X } });
 const ligandLabel = g => `${g.options[0].atoms[0].rawResidue}${g.options.length > 1 ? ` +${g.options.length - 1}` : ''} / ${g.options[0].atoms[0].chain} (${g.atoms})`;
+
+function clearCampaign() {
+  campaign = []; ui['campaign-result'].replaceChildren(); ui['campaign-results'].hidden = true;
+}
 
 function activeHighlight() {
   const group = choices?.ligands.find(g => g.id === ui['active-ligand'].value);
@@ -50,6 +75,9 @@ function activeHighlight() {
 viewer.onAtomPick = atom => {
   if (running || inputBusy || !choices) return;
   const label = viewer.sample?.atom_labels?.[atom];
+  if ([1, 2].includes(viewer.sample?.roles[atom]) && !ui['custom-panel'].hidden && preparedBase) {
+    editor.pick(atom, viewer.sample); return;
+  }
   const group = choices.ligands.find(g => label?.startsWith(`replacement:${g.id}:`)
     || g.options.some(o => o.atoms.some(a => atomLocator(a) === label)));
   if (group && keptLigands.has(group.id)) { ui['active-ligand'].value = group.id; activeHighlight(); }
@@ -63,7 +91,7 @@ function formatBytes(bytes) {
   return `${(bytes / 2 ** 20).toFixed(1)} MiB`;
 }
 
-async function applySample(nextSample, readyStatus = "Ready") {
+async function applySample(nextSample, readyStatus = "Ready", preserveCamera = false) {
   modelReady = false;
   device.pushErrorScope('out-of-memory');
   device.pushErrorScope('validation');
@@ -75,7 +103,7 @@ async function applySample(nextSample, readyStatus = "Ready") {
   sample = nextSample;
   modelReady = true;
   const initial = model.initialize(Number(ui["seed-input"].value) || 1);
-  viewer.setSample(sample, initial.coords);
+  viewer.setSample(sample, initial.coords, preserveCamera);
   activeHighlight();
   ui["atom-count"].textContent = sample.atoms.toLocaleString();
   ui["memory-label"].textContent = formatBytes(model.memoryBytes());
@@ -85,12 +113,15 @@ async function applySample(nextSample, readyStatus = "Ready") {
   ui["progress-bar"].style.width = "0%";
   setStatus(readyStatus);
   ui['run-button'].disabled = false;
+  ui['run-campaign'].disabled = false;
   return sample;
 }
 
 async function loadSample(file) {
+  clearCampaign();
   setStatus("Loading the selected molecular system.");
   presetSample = await fetch(assetUrl(`assets/samples/${file}`)).then((response) => response.json());
+  editor.setSample(null);
   return applySample(presetSample);
 }
 
@@ -110,6 +141,9 @@ function setInputBusy(busy) {
     ui[id].disabled = busy;
   }
   ui['run-button'].disabled = busy || !modelReady;
+  ui['run-campaign'].disabled = busy || !modelReady;
+  for (const id of ['step-select', 'seed-input', 'campaign-count', 'campaign-result', 'previous-result', 'next-result', 'download-result']) ui[id].disabled = busy;
+  editor.setBusy(busy || !modelReady || ui['custom-panel'].hidden);
   ui['prepare-selection'].disabled = busy || !pdbStructure;
   ui['active-ligand'].disabled = busy || !keptLigands.size;
   ui['remove-ligand'].disabled = busy || !keptLigands.size;
@@ -120,10 +154,14 @@ function setInputBusy(busy) {
 }
 
 function selectionPreview() {
+  clearCampaign();
   const generation = ++previewGeneration;
   modelReady = false;
   customSample = null;
+  preparedBase = null;
+  editor.setSample(null);
   ui['run-button'].disabled = true;
+  ui['run-campaign'].disabled = true;
   const subset = selectedStructure(pdbStructure, choices, keptChains, keptLigands);
   const preview = previewStructure(subset, previewGraphs);
   if (preview.atoms) viewer.setSample(preview, new Float32Array(preview.target_coords.flat()));
@@ -187,6 +225,8 @@ async function useSelection() {
     const prepared = await preparedPdbSelection(subset, keptLigands.size ? '__all__' : null);
     await applySample(prepared, 'Ready');
     customSample = prepared;
+    preparedBase = prepared;
+    editor.setSample(prepared);
     return prepared;
   } catch (error) { modelReady = false; setStatus(error.message); throw error; }
   finally { setInputBusy(false); }
@@ -299,47 +339,96 @@ async function applySmiles(smiles = ui["smiles-input"].value) {
   }
 }
 
-async function runInference() {
+function selectResult(index) {
+  const result = campaign[index];
+  if (!result || running) return;
+  ui['campaign-result'].value = String(index);
+  viewer.setSample(result.sample, result.coords, true);
+  ui['atom-count'].textContent = result.sample.atoms.toLocaleString();
+  ui['result-identities'].textContent = `Seed ${result.seed}${result.identities.length ? ' / ' + result.identities.join(', ') : ''}`;
+  ui['previous-result'].disabled = index === 0;
+  ui['next-result'].disabled = index === campaign.length - 1;
+  activeHighlight();
+}
+
+async function runSamples(count) {
   if (running || !modelReady) return;
+  const base = !ui['custom-panel'].hidden && preparedBase ? preparedBase : sample;
+  const edits = base === preparedBase ? new Map(editor.edits) : new Map();
+  const seed = Number(ui['seed-input'].value);
+  const steps = Number(ui['step-select'].value);
+  if (!Number.isInteger(count) || count < 1 || count > 200) { setStatus('Samples must be an integer from 1 to 200.'); return; }
+  if (!Number.isSafeInteger(seed) || seed < 1 || seed + count > 4294967296) { setStatus('Seed must be a positive 32-bit integer.'); return; }
+  // Validate every randomized topology before launching, without retaining N full graphs.
+  try {
+    let bytes = 0;
+    for (let index = 0; index < count; index++) {
+      const next = mutateSample(base, edits, seed + index).sample;
+      if (next.atoms > model.maximumAtoms) throw new Error(`Sample ${index + 1} exceeds the ${model.maximumAtoms}-atom adapter limit.`);
+      bytes += next.atoms * (edits.size ? 1400 : 12);
+      if (bytes > 512 * 2 ** 20) throw new Error('Campaign exceeds the 512 MiB result budget. Reduce the sample count.');
+    }
+  } catch (error) { setStatus(error.message); return; }
   running = true;
+  cancelCampaign = false;
+  editor.cancelMapping();
   setInputBusy(true);
-  const steps = Number(ui["step-select"].value);
-  const seed = Number(ui["seed-input"].value) || 1;
-  const { rng, coords: initial } = model.initialize(seed);
-  let previous = initial;
-  viewer.update(previous);
+  ui['stop-campaign'].hidden = false;
+  campaign = []; ui['campaign-result'].replaceChildren(); ui['campaign-results'].hidden = true;
+  let previous;
   const started = performance.now();
   try {
-    for (let index = 0; index < steps; index += 1) {
-      const start = index / steps;
-      const end = (index + 1) / steps;
-      ui["step-status"].textContent = `${index + 1} / ${steps}`;
-      ui["progress-bar"].style.width = `${100 * index / steps}%`;
-      setStatus(`Running step ${index + 1} of ${steps}.`);
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      const noise = model.drawNoise(start, end, rng);
-      const mapStarted = performance.now();
-      await model.transition(start, end, noise.increment, noise.latent, false);
-      const next = await model.coordinates();
-      const elapsed = performance.now() - mapStarted;
-      ui["map-time"].textContent = `${elapsed.toFixed(1)} ms`;
-      setStatus(`Step ${index + 1} completed in ${elapsed.toFixed(1)} ms.`);
-      viewer.update(next);
-      previous = next;
-      ui["progress-bar"].style.width = `${100 * (index + 1) / steps}%`;
+    for (let member = 0; member < count && !cancelCampaign; member++) {
+      const { sample: nextSample, resolved } = mutateSample(base, edits, seed + member);
+      if (sample !== nextSample) await applySample(nextSample, 'Ready', true);
+      // applySample enables commands for interactive preparation; keep them locked during a campaign.
+      setInputBusy(true);
+      const { rng, coords: initial } = model.initialize(seed + member);
+      viewer.setSample(nextSample, initial, true);
+      previous = initial;
+      for (let index = 0; index < steps; index += 1) {
+        if (cancelCampaign) break;
+        const start = index / steps;
+        const end = (index + 1) / steps;
+        ui["step-status"].textContent = `${index + 1} / ${steps}`;
+        ui["progress-bar"].style.width = `${100 * (member + index / steps) / count}%`;
+        setStatus(`Sample ${member + 1} / ${count}, step ${index + 1} / ${steps}`);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        if (cancelCampaign) break;
+        const noise = model.drawNoise(start, end, rng);
+        const mapStarted = performance.now();
+        await model.transition(start, end, noise.increment, noise.latent, false);
+        const next = await model.coordinates();
+        const elapsed = performance.now() - mapStarted;
+        ui["map-time"].textContent = `${elapsed.toFixed(1)} ms`;
+        viewer.update(next);
+        previous = next;
+        ui["progress-bar"].style.width = `${100 * (member + (index + 1) / steps) / count}%`;
+      }
+      if (cancelCampaign) break;
+      const identities = proteinChains(base).flatMap(c => c.residues.filter(r => resolved.has(r.id))
+        .map(r => `${c.id}:${r.aa}${r.number}${resolved.get(r.id)}`));
+      campaign.push({ sample: nextSample, coords: previous.slice(), seed: seed + member, steps, identities,
+        resolved: Object.fromEntries(resolved), checkpoint: model.weights.manifest.checkpoint_sha256 });
+      ui['campaign-result'].add(new Option(`${member + 1} / seed ${seed + member}`, String(member)));
+      ui['campaign-results'].hidden = false;
     }
     const total = performance.now() - started;
     ui["total-time"].textContent = `${(total / 1000).toFixed(2)} s`;
-    setStatus(`Inference complete. ${steps} steps evaluated in-browser.`);
+    setStatus(cancelCampaign ? `Stopped. ${campaign.length} samples completed.` : `Inference complete. ${campaign.length} samples / ${steps} steps.`);
   } catch (error) {
     console.error(error);
     setStatus(`Inference failed: ${error.message}`);
   } finally {
     running = false;
+    ui['stop-campaign'].hidden = true;
     setInputBusy(false);
+    if (campaign.length) selectResult(campaign.length - 1);
   }
   return previous;
 }
+
+async function runInference() { return runSamples(1); }
 
 async function initialize() {
   if (!navigator.gpu) throw new Error("This browser does not expose WebGPU.");
@@ -399,19 +488,37 @@ async function initialize() {
 }
 
 ui["run-button"].addEventListener("click", runInference);
+ui['run-campaign'].addEventListener('click', () => runSamples(Number(ui['campaign-count'].value)));
+ui['stop-campaign'].addEventListener('click', () => { cancelCampaign = true; });
+ui['campaign-result'].addEventListener('change', () => selectResult(Number(ui['campaign-result'].value)));
+ui['previous-result'].addEventListener('click', () => selectResult(Number(ui['campaign-result'].value) - 1));
+ui['next-result'].addEventListener('click', () => selectResult(Number(ui['campaign-result'].value) + 1));
+ui['download-result'].addEventListener('click', () => {
+  const result = campaign[Number(ui['campaign-result'].value)]; if (!result) return;
+  const { reference_sample: _reference, ...sampleData } = result.sample;
+  const blob = new Blob([JSON.stringify({ ...result, sample: sampleData, coords: [...result.coords] })], { type: 'application/json' });
+  const url = URL.createObjectURL(blob), link = document.createElement('a');
+  link.href = url; link.download = `sample-${result.seed}.json`; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
 ui["reset-camera"].addEventListener("click", () => viewer.resetCamera());
 ui["show-reference"].addEventListener("change", () => {
   viewer.setReferenceVisible(ui["show-reference"].checked);
 });
 ui["sample-select"].addEventListener("change", () => loadSample(ui["sample-select"].value));
 ui["example-tab"].addEventListener("click", async () => {
+  clearCampaign();
   setSourceMode("example");
+  editor.setBusy(true); document.getElementById('sequence-panel').hidden = true;
   if (presetSample) await applySample(presetSample);
 });
 ui["custom-tab"].addEventListener("click", async () => {
+  clearCampaign();
   setSourceMode("custom");
   if (customSample && sample !== customSample) await applySample(customSample);
   else if (pdbStructure && !customSample) selectionPreview();
+  if (preparedBase) editor.setSample(preparedBase);
+  editor.setBusy(!modelReady);
 });
 ui["open-pdb"].addEventListener("click", () => ui["pdb-input"].click());
 ui["fetch-pdb"].addEventListener("click", () => fetchPdb().catch((error) => setStatus(error.message)));
@@ -472,10 +579,13 @@ window.__wsfmdock = {
   get model() { return model; },
   get viewer() { return viewer; },
   get sample() { return sample; },
+  get editor() { return editor; },
+  get campaign() { return campaign; },
   async loadSample(file) { return loadSample(file); },
   async loadPdbText(text, filename) { return preparePdb(text, filename); },
   async fetchPdb(pdbId) { return fetchPdb(pdbId); },
   async useSelection() { return useSelection(); },
   async replaceLigand(smiles) { return applySmiles(smiles); },
   async runInference() { return runInference(); },
+  async runCampaign(count) { return runSamples(count); },
 };

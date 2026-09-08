@@ -125,9 +125,13 @@ export class MolecularViewer {
       const rect = this.renderer.domElement.getBoundingClientRect();
       raycaster.setFromCamera(new THREE.Vector2(2 * (event.clientX - rect.left) / rect.width - 1,
         1 - 2 * (event.clientY - rect.top) / rect.height), this.camera);
-      const hit = raycaster.intersectObjects((this.ligandMeshes ?? []).map(item => item.mesh))[0];
+      const pickable = [...this.backboneMeshes ?? [], ...this.ligandMeshes ?? [],
+        { mesh: this.sideAtoms, atoms: this.sidechainAtoms },
+        { mesh: this.backbone, atoms: this.backbonePickAtoms },
+        { mesh: this.sideBonds, atoms: this.sideBondPickAtoms }].filter(item => item.mesh && item.atoms);
+      const hit = raycaster.intersectObjects(pickable.map(item => item.mesh))[0];
       if (hit) {
-        const item = this.ligandMeshes.find(item => item.mesh === hit.object);
+        const item = pickable.find(item => item.mesh === hit.object);
         this.onAtomPick?.(item.atoms[hit.instanceId]);
       }
     });
@@ -140,6 +144,9 @@ export class MolecularViewer {
     this.scene.add(rim);
     this.group = null;
     this.sample = null;
+    this.backboneMeshes = []; this.ligandMeshes = []; this.sideAtoms = null;
+    this.backbonePickAtoms = []; this.sideBondPickAtoms = [];
+    this.backbone = null; this.sideBonds = null;
     this.referenceVisible = false;
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
@@ -155,9 +162,12 @@ export class MolecularViewer {
       object.material?.dispose();
     });
     this.group = null;
+    this.sample = null;
+    this.backboneMeshes = []; this.ligandMeshes = []; this.sideAtoms = null;
+    this.backbone = null; this.sideBonds = null;
   }
 
-  setSample(sample, coords) {
+  setSample(sample, coords, preserveCamera = false) {
     this.clear();
     this.sample = sample;
     this.group = new THREE.Group();
@@ -188,7 +198,8 @@ export class MolecularViewer {
     }));
     this.referenceGroup = new THREE.Group();
     this.referenceGroup.visible = this.referenceVisible;
-    this.referenceAtoms = sample.roles.flatMap(
+    const reference = sample.reference_sample ?? sample;
+    this.referenceAtoms = reference.roles.flatMap(
       (role, atom) => role === ROLE_SIDECHAIN || role === ROLE_LIGAND || role === 0 ? [atom] : [],
     );
     this.referenceAtomMesh = new THREE.InstancedMesh(
@@ -196,7 +207,7 @@ export class MolecularViewer {
       material(0xf0bd68, 0.2),
       this.referenceAtoms.length,
     );
-    this.referencePairs = [...sample.sidechain_bonds, ...this.moleculePairs];
+    this.referencePairs = [...reference.sidechain_bonds, ...reference.ligand_bonds, ...reference.molecule_bonds];
     this.referenceBondMesh = new THREE.InstancedMesh(
       cylinder,
       material(0xdca85e, 0.16),
@@ -207,7 +218,7 @@ export class MolecularViewer {
       mesh.frustumCulled = false;
       this.referenceGroup.add(mesh);
     }
-    const target = flattenCoords(sample.target_coords);
+    const target = flattenCoords(reference.target_coords);
     this.referenceAtoms.forEach((atom, index) => atomMatrix(this.referenceAtomMesh, index, target, atom, 0.105));
     let referenceCursor = 0;
     for (const [first, second] of this.referencePairs) {
@@ -231,17 +242,27 @@ export class MolecularViewer {
     }
     this.sidechainAtoms = sample.roles.flatMap((role, atom) => role === ROLE_SIDECHAIN ? [atom] : []);
     this.update(coords);
-    this.resetCamera();
+    if (!preserveCamera) this.resetCamera();
+  }
+
+  highlightResidues(ids) {
+    if (!this.sample) return;
+    for (const { mesh, atoms } of [...this.backboneMeshes, { mesh: this.sideAtoms, atoms: this.sidechainAtoms }]) {
+      atoms.forEach((atom, i) => mesh.setColorAt(i, this.selectionColor(ids.has(this.sample.residue_ids[atom]))));
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
   }
 
   update(coords) {
     if (!this.sample) return;
     let cursor = 0;
+    this.backbonePickAtoms = [];
     for (const [first, second] of this.backbonePairs) {
-      if (bondMatrix(this.backbone, cursor, coords, first, second, 0.038)) cursor += 1;
+      if (bondMatrix(this.backbone, cursor, coords, first, second, 0.038)) { this.backbonePickAtoms.push(first); cursor += 1; }
     }
     this.backbone.count = cursor;
     this.backbone.instanceMatrix.needsUpdate = true;
+    this.backbone.boundingSphere = null;
     for (const { element, atoms, mesh } of this.backboneMeshes) {
       atoms.forEach((atom, index) => atomMatrix(
         mesh,
@@ -251,17 +272,21 @@ export class MolecularViewer {
         BACKBONE_RADII.get(element) ?? 0.075,
       ));
       mesh.instanceMatrix.needsUpdate = true;
+      mesh.boundingSphere = null;
     }
     cursor = 0;
     for (const atom of this.sidechainAtoms) atomMatrix(this.sideAtoms, cursor++, coords, atom, 0.09);
     this.sideAtoms.count = cursor;
     this.sideAtoms.instanceMatrix.needsUpdate = true;
+    this.sideAtoms.boundingSphere = null;
     cursor = 0;
+    this.sideBondPickAtoms = [];
     for (const [first, second] of this.sample.sidechain_bonds) {
-      if (bondMatrix(this.sideBonds, cursor, coords, first, second, 0.038)) cursor += 1;
+      if (bondMatrix(this.sideBonds, cursor, coords, first, second, 0.038)) { this.sideBondPickAtoms.push(first); cursor += 1; }
     }
     this.sideBonds.count = cursor;
     this.sideBonds.instanceMatrix.needsUpdate = true;
+    this.sideBonds.boundingSphere = null;
     cursor = 0;
     for (const [first, second] of this.moleculePairs) {
       if (bondMatrix(this.ligandBonds, cursor, coords, first, second, 0.068)) cursor += 1;
@@ -271,6 +296,7 @@ export class MolecularViewer {
     for (const { element, atoms, mesh } of this.ligandMeshes) {
       atoms.forEach((atom, index) => atomMatrix(mesh, index, coords, atom, ELEMENT_RADII.get(element) ?? 0.26));
       mesh.instanceMatrix.needsUpdate = true;
+      mesh.boundingSphere = null;
     }
   }
 

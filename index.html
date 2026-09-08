@@ -45,6 +45,7 @@
           <fieldset class="structure-choices"><legend>Ligands</legend><div class="choice-actions"><button id="ligands-all" type="button">All</button><button id="ligands-none" type="button">None</button></div><div id="ligand-list"></div></fieldset>
           <p id="selection-count" class="structure-label">No structure loaded</p>
           <button id="prepare-selection" type="button" disabled>Use selection</button>
+          <button id="edit-sequence" class="secondary" type="button" disabled>Sequence</button>
           <label>Active ligand<select id="active-ligand" disabled></select></label>
           <button id="remove-ligand" class="secondary" type="button" disabled>Remove ligand</button>
           <label>
@@ -72,6 +73,20 @@
           <span id="run-icon">&#9654;</span>
           <span id="run-label">Run inference</span>
         </button>
+        <div class="field-row campaign-start">
+          <label>Samples<input id="campaign-count" type="number" value="8" min="1" max="200" step="1" /></label>
+          <button id="run-campaign" type="button" disabled>Run campaign</button>
+        </div>
+        <button id="stop-campaign" class="secondary" type="button" hidden>Stop</button>
+        <section id="campaign-results" hidden>
+          <div class="campaign-navigation">
+            <button id="previous-result" class="secondary icon-button" title="Previous sample" aria-label="Previous sample"><i data-lucide="chevron-left"></i></button>
+            <select id="campaign-result" aria-label="Campaign sample"></select>
+            <button id="next-result" class="secondary icon-button" title="Next sample" aria-label="Next sample"><i data-lucide="chevron-right"></i></button>
+            <button id="download-result" class="secondary icon-button" title="Download sample" aria-label="Download sample"><i data-lucide="download"></i></button>
+          </div>
+          <p id="result-identities" class="structure-label"></p>
+        </section>
         <button id="reset-camera" class="secondary" type="button" disabled>Reset view</button>
         <label class="toggle-row">
           <input id="show-reference" type="checkbox" />
@@ -88,6 +103,29 @@
         <div class="progress"><span id="progress-bar"></span></div>
         <p id="status" role="status">Requesting a WebGPU adapter.</p>
       </aside>
+      <section id="sequence-panel" aria-label="Protein sequence editor" hidden>
+        <div class="sequence-toolbar">
+          <label>Chain<select id="sequence-chain"></select></label>
+          <span id="selected-residues"></span>
+          <button id="close-sequence" class="secondary icon-button" title="Close sequence" aria-label="Close sequence"><i data-lucide="x"></i></button>
+        </div>
+        <div class="sequence-import">
+          <textarea id="sequence-input" aria-label="Amino-acid sequence" spellcheck="false" rows="2"></textarea>
+          <input id="sequence-file" type="file" accept=".fasta,.fa,.faa,.fas,.txt" hidden />
+          <button id="open-sequence" class="secondary icon-button" title="Upload sequence" aria-label="Upload sequence"><i data-lucide="upload"></i></button>
+          <button id="align-sequence" type="button">Align</button>
+          <select id="sequence-record" aria-label="Uploaded sequence"></select>
+        </div>
+        <p id="alignment-status" role="status"></p>
+        <div id="sequence-grid" aria-label="Sequence alignment"></div>
+        <div class="sequence-actions">
+          <button id="swap-selected" type="button" disabled>Swap selected</button>
+          <select id="residue-identity" aria-label="Residue identity"></select>
+          <button id="set-identity" type="button" disabled>Set identity</button>
+          <button id="clear-edits" class="secondary" type="button" disabled>Clear edits</button>
+        </div>
+        <p id="mutation-list"></p>
+      </section>
       <div class="legend" aria-label="Atom role legend">
         <span><i class="protein"></i>Protein</span>
         <span><i class="sidechain"></i>Moving side chain</span>

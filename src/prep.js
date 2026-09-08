@@ -39,7 +39,8 @@ const ELEMENTS = [
   "Mt", "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og",
 ];
 const ELEMENT_NUMBER = new Map(ELEMENTS.map((symbol, index) => [symbol.toUpperCase(), index]));
-export { RESIDUE_INDEX, RESIDUE_ALIASES, ELEMENT_NUMBER, WATER_NAMES, atomLocator };
+export { RESIDUE_INDEX, RESIDUE_ALIASES, ELEMENT_NUMBER, WATER_NAMES, atomLocator,
+  RESIDUES, ATOM_NAMES, BACKBONE_NAMES, assembleSample };
 
 function elementNumber(line, atomName, protein) {
   const declared = line.slice(76, 78).trim().toUpperCase();
