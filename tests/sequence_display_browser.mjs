@@ -37,7 +37,7 @@ try {
   await page.click('#edit-sequence');
   await page.fill('#sequence-input', 'AKNAC');
   await page.click('#align-sequence');
-  await page.waitForFunction(() => window.__wsfmdock.editor.results.size === 2);
+  await page.waitForFunction(() => window.__wsfmdock.editor.results.size === 1);
   assert.equal(await page.locator('#sequence-chain').inputValue(), 'A');
   await page.locator('[data-residue="1"]').click();
   const highlight = await page.evaluate(() => {
@@ -65,6 +65,11 @@ try {
     a.editor.pick(atom, preview);
   });
   assert.equal(await page.locator('#sequence-chain').inputValue(), 'B');
+  assert.equal(await page.locator('#sequence-panel').getAttribute('data-chain'), 'B');
+  assert.equal(await page.locator('#sequence-grid .residue-cell').count(), 3);
+  assert.equal(await page.locator('#sequence-grid .difference').count(), 0);
+  assert.equal(await page.locator('#swap-all').isDisabled(), true);
+  assert.deepEqual(await page.locator('#sequence-grid .residue-cell span:nth-child(3)').allTextContents(), ['-', '-', '-']);
   assert.equal(await page.locator('[data-residue="6"]').getAttribute('aria-pressed'), 'true');
   assert.match(await page.locator('[data-residue="6"]').getAttribute('title'), /B:102 TYR/);
   await page.selectOption('#residue-identity', 'X'); await page.click('#set-identity');
@@ -90,6 +95,19 @@ try {
   assert.equal(await page.locator('#sequence-chain').inputValue(), 'B');
   assert.equal(await page.locator('[data-residue="7"]').getAttribute('aria-pressed'), 'true');
   await page.selectOption('#sequence-chain', 'A');
+  assert.deepEqual(await page.evaluate(() => [...window.__wsfmdock.editor.selected]), [1, 2, 3]);
+  const race = await page.evaluate(async () => {
+    const a = window.__wsfmdock, pending = a.editor.mapRecord();
+    const atom = a.viewer.sample.atom_labels.findIndex(label => label === 'CA|VAL|B|104|');
+    a.editor.pick(atom, a.viewer.sample);
+    await pending;
+    return { chain: a.editor.activeChain, displayed: document.querySelector('#sequence-chain').value,
+      alignmentChains: [...a.editor.results.keys()], selected: [...a.editor.selected] };
+  });
+  assert.equal(race.chain, 'B'); assert.equal(race.displayed, 'B');
+  assert.deepEqual(race.alignmentChains, ['A']); assert.ok(race.selected.includes(7));
+  await page.selectOption('#sequence-chain', 'A');
+  assert.equal(await page.locator('#sequence-grid .difference').count(), 2);
   assert.deepEqual(await page.evaluate(() => [...window.__wsfmdock.editor.selected]), [1, 2, 3]);
   await page.click('#reset-camera');
   await page.screenshot({ path: 'test-results-sequence-display-desktop.png' });

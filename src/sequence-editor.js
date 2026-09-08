@@ -5,6 +5,7 @@ export class SequenceEditor {
     this.onChange = onChange; this.onSelect = onSelect; this.onError = onError;
     this.edits = new Map(); this.selected = new Set(); this.results = new Map();
     this.chainSelections = new Map();
+    this.navigationRevision = 0;
     this.ui = Object.fromEntries(['sequence-panel', 'sequence-chain', 'sequence-input', 'sequence-file',
       'open-sequence', 'align-sequence', 'sequence-record', 'sequence-grid', 'alignment-status',
       'residue-identity', 'set-identity', 'swap-selected', 'swap-all', 'clear-edits', 'selected-residues', 'close-sequence',
@@ -76,7 +77,8 @@ export class SequenceEditor {
     this.cancelMapping();
     const record = this.records?.[Number(this.ui['sequence-record'].value)];
     if (!record || !this.sample) return;
-    this.results.clear(); this.selected.clear(); this.render();
+    const navigationRevision = this.navigationRevision;
+    this.render();
     const worker = new Worker(new URL('./alignment-worker.js', import.meta.url), { type: 'module' });
     this.worker = worker;
     this.ui['alignment-status'].textContent = 'Aligning';
@@ -87,13 +89,17 @@ export class SequenceEditor {
       worker.postMessage({ chains: this.chains, sequence: record.sequence });
     }).finally(() => { worker.terminate(); if (this.worker === worker) { this.worker = null; this.cancelPending = null; } });
     if (!result) return;
-    this.results = new Map(result.map(r => [r.id, r]));
     const best = [...result].sort((a, b) => b.score - a.score)[0];
-    if (best) this.switchChain(best.id, false);
+    // Search every retained chain, but attach the query only to its best match.
+    if (best?.aligned) {
+      this.results.set(best.id, best);
+      if (navigationRevision === this.navigationRevision) this.switchChain(best.id, false);
+    }
     this.render();
   }
 
   switchChain(id, render = true) {
+    this.navigationRevision++;
     if (this.activeChain !== undefined) this.chainSelections.set(this.activeChain, this.selected);
     this.activeChain = id;
     this.ui['sequence-chain'].value = id;
@@ -151,6 +157,7 @@ export class SequenceEditor {
   render() {
     const u = this.ui, chain = this.chains?.find(c => c.id === u['sequence-chain'].value);
     const result = this.results.get(chain?.id);
+    u['sequence-panel'].dataset.chain = chain?.id ?? '';
     u['alignment-status'].textContent = result
       ? `${result.score.toFixed(1)} score / ${(100 * result.identity).toFixed(1)}% identity / ${(100 * result.coverage).toFixed(1)}% coverage`
       : '';
