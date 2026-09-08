@@ -143,6 +143,7 @@ export function mutateSample(sample, edits, seed) {
   }
   const result = assembleSample({ id: sample.id, label: sample.label, ...arrays, bonds, graphSource: sample.graph_source });
   result.atom_labels = labels;
+  result.coordinate_origin = sample.coordinate_origin;
   result.reference_sample = sample;
   return { sample: result, resolved };
 }

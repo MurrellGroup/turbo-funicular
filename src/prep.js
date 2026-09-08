@@ -502,6 +502,7 @@ export function preparePdbSample(
       : "receptor only",
   });
   result.atom_labels = [...protein, ...ligand].map(atomLocator);
+  result.coordinate_origin = center;
   return result;
 }
 
@@ -568,5 +569,6 @@ export function replaceLigand(sample, graph, removedEntities = null) {
   });
   result.atom_labels = keep.map(i => sample.atom_labels?.[i] ?? `atom-${i}`)
     .concat(graph.atomicNumbers.map((_, i) => `replacement-${i}`));
+  result.coordinate_origin = sample.coordinate_origin;
   return result;
 }

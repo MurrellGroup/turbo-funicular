@@ -164,7 +164,7 @@ button.secondary { margin-top: 8px; border: 1px solid #3a4242; background: trans
 #mpnn-options summary { cursor: pointer; }
 #mpnn-context { white-space: pre-wrap; }
 .mpnn-file-actions { display: flex; gap: 8px; margin-top: 8px; }
-.campaign-navigation { display: grid; grid-template-columns: 30px 1fr 30px 30px; gap: 4px; align-items: center; margin-top: 12px; }
+.campaign-navigation { display: grid; grid-template-columns: 30px minmax(0, 1fr) 30px 76px 30px; gap: 4px; align-items: center; margin-top: 12px; }
 .icon-button, button.icon-button { width: 30px; height: 34px; padding: 5px; margin: 0; display: grid; place-items: center; }
 .icon-button svg { width: 18px; height: 18px; }
 #sequence-panel { position: absolute; z-index: 3; left: 16px; right: 364px; bottom: 16px; background: #121718f5;

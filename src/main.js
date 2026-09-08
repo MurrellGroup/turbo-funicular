@@ -12,6 +12,7 @@ import { mutateSample, proteinChains } from './sequence.js';
 import { createIcons, ChevronLeft, ChevronRight, Download, Upload, X } from 'lucide';
 import { MpnnControls } from './mpnn-controls.js';
 import { MpnnProposals } from './mpnn.js';
+import { exportPdb } from './pdb-export.js';
 
 const ui = Object.fromEntries([
   "device-dot", "device-label", "sample-select", "step-select", "seed-input",
@@ -23,7 +24,7 @@ const ui = Object.fromEntries([
   "protein-color", "chain-colors",
   "active-ligand", "remove-ligand",
   "campaign-count", "run-campaign", "stop-campaign", "campaign-results", "campaign-result",
-  "previous-result", "next-result", "download-result", "result-identities",
+  "previous-result", "next-result", "download-result", "result-identities", "export-format",
 ].map((id) => [id, document.getElementById(id)]));
 
 const viewer = new MolecularViewer(document.getElementById("viewport"));
@@ -551,11 +552,14 @@ ui['previous-result'].addEventListener('click', () => selectResult(Number(ui['ca
 ui['next-result'].addEventListener('click', () => selectResult(Number(ui['campaign-result'].value) + 1));
 ui['download-result'].addEventListener('click', () => {
   const result = campaign[Number(ui['campaign-result'].value)]; if (!result) return;
-  const { reference_sample: _reference, ...sampleData } = result.sample;
-  const blob = new Blob([JSON.stringify({ ...result, sample: sampleData, coords: [...result.coords] })], { type: 'application/json' });
-  const url = URL.createObjectURL(blob), link = document.createElement('a');
-  link.href = url; link.download = `sample-${result.seed}.json`; link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  try {
+    const pdb = ui['export-format'].value === 'pdb';
+    const { reference_sample: _reference, ...sampleData } = result.sample;
+    const blob = new Blob([pdb ? exportPdb(result) : JSON.stringify({ ...result, sample: sampleData, coords: [...result.coords] })], { type: pdb ? 'chemical/x-pdb' : 'application/json' });
+    const url = URL.createObjectURL(blob), link = document.createElement('a');
+    link.href = url; link.download = `sample-${result.seed}.${pdb ? 'pdb' : 'json'}`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { setStatus(`Export failed: ${error.message}`); }
 });
 ui["reset-camera"].addEventListener("click", () => viewer.resetCamera());
 ui["show-reference"].addEventListener("change", () => {
