@@ -67,7 +67,8 @@ class SampleBuffers {
 export class DockingWebGpuModel {
   static async create(device, manifestUrl = "/assets/model/manifest.json", suppliedManifest = null) {
     const manifest = suppliedManifest ?? await fetch(manifestUrl).then((response) => response.json());
-    if (manifest.format !== "wsfmdock_webgpu_v6") throw new Error("Unsupported model export.");
+    if (manifest.format !== "wsfmdock_webgpu_v7" || manifest.lateral_width !== 1024
+      || manifest.activation_precision !== "float32") throw new Error("Unsupported model export.");
     const [weights, kernels] = await Promise.all([
       WeightStore.load(device, manifestUrl, manifest),
       Kernels.create(device, manifest.activation_precision),
@@ -159,7 +160,8 @@ export class DockingWebGpuModel {
       increment: this.f32(n * 3, "increment"),
       latent: this.f32(n * 3, "latent"),
       sharedNode: this.f16(n * d, "shared_node"),
-      branchNodes: [0, 1, 2, 3, 4].map((index) => this.f16(n * d, `branch_node_${index}`)),
+      lateralProjection: this.f16(n * 1024, "lateral_projection"),
+      lateralMixed: [0, 1, 2, 3, 4].map((index) => this.f16(n * 1024, `lateral_mixed_${index}`)),
     };
     this.currentCoords = this.buffers.coordsA;
     this.nextCoords = this.buffers.coordsB;
@@ -357,10 +359,11 @@ export class DockingWebGpuModel {
         this.kernels.dispatch(pass, "copyF16", [current, b.sharedNode], groups(n * d));
       }
       this.runBlock(pass, current, other, b.localCondition, endpoint, `local.blocks.${block}`, true);
-      if (block >= this.weights.manifest.finite_start_block) {
-        const branch = block - this.weights.manifest.finite_start_block;
-        this.kernels.dispatch(pass, "copyF16", [current, b.branchNodes[branch]], groups(n * d));
-      }
+      this.matmul(pass, current, `finite.lateral.projections.${block}`, b.lateralProjection, n, 1024, d);
+      this.kernels.dispatch(pass, "lateralMix", [
+        b.lateralProjection, this.weights.get("finite.lateral.mixing"), ...b.lateralMixed,
+        this.kernels.uniformU32([n * 1024, 1024, this.config.depth, block]),
+      ], groups(n * 1024));
       if (this.weights.manifest.endpoint_block_indices.includes(block)) {
         this.matmul(pass, current, `local.endpoint_updates.${endpointIndex}`, b.endpointDelta, n, 3, d);
         const gate = (1 - start) / (1 + start);
@@ -402,7 +405,7 @@ export class DockingWebGpuModel {
         [endpointByBranch[block], b.increment, b.residual, this.sampleBuffers.baseScales, b.secant, scalar],
         groups(n * 3),
       );
-      this.matmul(pass, b.branchNodes[block], `finite.lateral_adapters.${block}`, b.deltaNode, n, d, d);
+      this.matmul(pass, b.lateralMixed[block], `finite.lateral.outputs.${block}`, b.deltaNode, n, d, 1024);
       this.kernels.dispatch(pass, "addF16", [current, b.deltaNode, other], groups(n * d));
       [current, other] = [other, current];
       this.runBlock(pass, current, other, b.finiteCondition, b.secant, `finite.blocks.${block}`, true);

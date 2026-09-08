@@ -6,10 +6,12 @@ const browser = await chromium.launch({ headless: false,
   args: ['--enable-unsafe-webgpu', '--use-angle=vulkan',
     '--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan', '--ignore-gpu-blocklist'],
 });
+const deadline = setTimeout(() => browser.close(), 180_000);
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: true });
   const errors = [], downloads = [];
   page.on('pageerror', error => errors.push(error.message));
+  page.on('requestfailed', request => console.error(request.url().split('?')[0], request.failure()));
   page.on('response', response => {
     let request = response.request(), remote = false;
     while (request) {
@@ -20,15 +22,19 @@ try {
   });
   // Exercise remote weights even when validating the local development page.
   await page.route('**/assets/model/manifest.json', async route => {
-    const root = 'https://huggingface.co/murrellb/WSFMDocking/resolve/main/webgpu/ck_135000/';
+    const root = 'https://huggingface.co/murrellb/WSFMDocking/resolve/5886cc4cf17575a57f54a6e25d3b7c2458a99d3c/webgpu/ck_240000/';
     const response = await fetch(root + 'manifest.json');
     const manifest = await response.json();
     manifest.weight_file = root + manifest.weight_file;
     await route.fulfill({ json: manifest });
   });
   await page.goto(url, { waitUntil: 'domcontentloaded' });
+  console.log('Page loaded');
   await page.evaluate(() => window.__wsfmdock.ready);
-  assert.equal(await page.evaluate(() => window.__wsfmdock.model.weights.manifest.iteration), 135000);
+  console.log('Model loaded');
+  assert.equal(await page.evaluate(() => window.__wsfmdock.model.weights.manifest.iteration), 240000);
+  assert.equal(await page.evaluate(() => window.__wsfmdock.model.weights.manifest.checkpoint_sha256),
+    'd492168d57bdfcf2d456fb7d88286aa8153791336058b7de6a519481095a6afe');
   const prepared = await page.evaluate(async () => {
     await window.__wsfmdock.fetchPdb('4BYH');
     const ids = [...document.querySelectorAll('#ligand-list input')].slice(1).map(i => i.value);
@@ -47,6 +53,7 @@ try {
       moved: Math.max(...final.map((v, i) => Math.abs(v - initial[i]))),
       status: document.getElementById('status').textContent };
   });
+  console.log('Attached inference complete');
   assert.equal(prepared.ligandAtoms, 130);
   assert.equal(prepared.attachments.length, 1);
   assert.ok(prepared.finite && prepared.moved > 1);
@@ -85,4 +92,4 @@ try {
   assert.ok(downloads.some(([status, address]) => [200, 302].includes(status) && address.includes('weights.f32')));
   assert.ok(downloads.some(([status]) => status === 200));
   console.log(JSON.stringify({ prepared, desktopPixels, mobilePixels, free, downloads }, null, 2));
-} finally { await browser.close(); }
+} finally { clearTimeout(deadline); await browser.close(); }

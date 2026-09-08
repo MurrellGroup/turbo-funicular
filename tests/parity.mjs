@@ -46,6 +46,8 @@ try {
   await page.evaluate(() => window.__wsfmdock.ready);
   const result = await page.evaluate(async ({ fixture, trajectory }) => {
     const model = window.__wsfmdock.model;
+    if (model.weights.manifest.checkpoint_sha256 !== fixture.checkpoint_sha256
+      || fixture.checkpoint_sha256 !== trajectory.checkpoint_sha256) throw new Error("Checkpoint mismatch");
     const sample = await fetch(new URL(`assets/samples/${fixture.sample_file}`, location.href)).then(r => r.json());
     await model.setSample(sample);
     const metrics = (actual, expected, movingOnly) => {
@@ -54,6 +56,10 @@ try {
       let maximum = 0;
       let count = 0;
       for (let index = 0; index < actual.length; index += 1) {
+        if (!Number.isFinite(actual[index])) throw new Error("Nonfinite browser output");
+        if (!sample.coordinate_design[Math.floor(index / 3)] && actual[index] !== expected[index]) {
+          throw new Error("Fixed coordinate differs");
+        }
         if (movingOnly && !sample.coordinate_design[Math.floor(index / 3)]) continue;
         const difference = actual[index] - expected[index];
         sum += difference * difference;

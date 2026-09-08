@@ -1,16 +1,12 @@
 import { chromium } from 'playwright';
-import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 const browser = await chromium.launch({ headless: false,
   executablePath: process.env.CHROME_PATH ?? '/home/murrellb/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome',
   args: ['--enable-unsafe-webgpu', '--use-angle=vulkan', '--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan', '--ignore-gpu-blocklist'] });
-const baseline = execFileSync('git', ['show', 'd66e3a4:src/gpu.js'], { encoding: 'utf8' })
-  .replace('this.uniforms = new Map();', 'this.uniforms = new Map(); this.bindGroups = new Map();');
 const results = [];
 try {
-  for (const reference of [true, false, false, true]) {
+  for (const repeat of [0, 1]) {
     const page = await browser.newPage({ ignoreHTTPSErrors: true });
-    if (reference) await page.route('**/src/gpu.js', r => r.fulfill({ body: baseline, contentType: 'application/javascript' }));
     await page.goto('https://127.0.0.1:8791');
     await page.evaluate(() => window.__wsfmdock.ready);
     const result = await page.evaluate(async () => {
@@ -34,7 +30,7 @@ try {
       }
       return output;
     });
-    results.push({ reference, ...result });
+    results.push({ repeat, ...result });
     for (const sample of result.samples) assert.ok(sample.rms < 1e-4);
     console.log(JSON.stringify(results.at(-1)));
     await page.close();

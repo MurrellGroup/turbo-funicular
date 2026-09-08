@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 const browser = await chromium.launch({ headless: false,
   executablePath: '/home/murrellb/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome',
@@ -10,8 +9,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('https://127.0.0.1:8791');
   await page.evaluate(() => window.__wsfmdock.ready);
-  const source = execFileSync('git', ['show', 'd66e3a4:src/gpu.js'], { encoding: 'utf8' });
-  const result = await page.evaluate(async ({ source, pdb, seedA, seedB, steps }) => {
+  const result = await page.evaluate(async ({ pdb, seedA, seedB, steps }) => {
     const api = window.__wsfmdock;
     await api.fetchPdb(pdb);
     const sample = await api.useSelection();
@@ -42,19 +40,14 @@ try {
     }
     const a = await run(seedA), b = await run(seedB), again = await run(seedA), fresh = await run(seedB, true);
     const rms = (a, b) => Math.sqrt(a.reduce((s, x, i) => s + (x - b[i]) ** 2, 0) / a.length);
-    const old = await import(URL.createObjectURL(new Blob([source], { type: 'application/javascript' })));
-    model.kernels = await old.Kernels.create(model.device, 'float32');
-    model.kernels.bindGroups = new Map();
-    const reference = await run(seedB, true);
     return { atoms: sample.atoms, seedA, seedB, steps, attachments, aLengths: a.lengths, bLengths: b.lengths,
       repeatRms: rms(a.coords, again.coords), freshRms: rms(b.coords, fresh.coords),
-      referenceRms: rms(b.coords, reference.coords), referenceLengths: reference.lengths };
-  }, { source, pdb: process.env.PDB_ID ?? '4BYH', seedA: Number(process.env.SEED_A ?? 20260902),
+      checkpointSha256: model.weights.manifest.checkpoint_sha256 };
+  }, { pdb: process.env.PDB_ID ?? '4BYH', seedA: Number(process.env.SEED_A ?? 20260902),
     seedB: Number(process.env.SEED_B ?? 20260903), steps: Number(process.env.STEPS ?? 8) });
   console.log(JSON.stringify(result, null, 2));
   assert.deepEqual(errors, []);
   assert.ok(result.attachments.length > 0);
   assert.equal(result.repeatRms, 0);
   assert.equal(result.freshRms, 0);
-  assert.ok(result.referenceRms < 2e-4);
 } finally { await browser.close(); }

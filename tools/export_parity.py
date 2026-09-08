@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -48,7 +49,8 @@ def main() -> None:
     n = int(sample["atoms"])
     device = torch.device("cuda")
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    model = EndpointDockingCKModel(ModelConfig(**checkpoint["model_config"])).to(device)
+    model = EndpointDockingCKModel(ModelConfig(**checkpoint["model_config"]),
+                                  lateral_width=checkpoint["lateral_width"]).to(device)
     model.load_state_dict(checkpoint["ema"], strict=True)
     model.eval().requires_grad_(False)
     rng = np.random.default_rng(args.seed)
@@ -103,6 +105,8 @@ def main() -> None:
         )
     payload = {
         "format": "wsfmdock_webgpu_parity_v1",
+        "checkpoint_sha256": hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(),
+        "iteration": checkpoint["iteration"],
         "sample_file": args.sample.name,
         "seed": args.seed,
         "start": args.start,

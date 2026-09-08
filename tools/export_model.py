@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import struct
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +16,7 @@ def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--precision", choices=("float16", "float32"), default="float32")
+    parser.add_argument("--precision", choices=("float32",), default="float32")
     return parser.parse_args()
 
 
@@ -111,7 +110,7 @@ def main() -> None:
     args = arguments()
     checkpoint_bytes = args.checkpoint.read_bytes()
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    expected = "continuous_docking_pairgraph_allblock_secant_x1_ck_v6"
+    expected = "continuous_docking_pairgraph_alldepth_secant_x1_ck_v7"
     if checkpoint.get("method") != expected or checkpoint.get("stage") != "ck":
         raise ValueError("unsupported checkpoint method or stage")
     state = checkpoint["ema"]
@@ -125,6 +124,8 @@ def main() -> None:
             raise ValueError(f"unsupported {key}: {config.get(key)}")
     if checkpoint.get('dataset_signature', {}).get('molecule_initial_std') != 10.0:
         raise ValueError('unsupported initial distribution')
+    if checkpoint.get("lateral_width") != 1024:
+        raise ValueError("unsupported lateral width")
     writer = Writer(args.precision)
     writer.add(
         "local.embedding",
@@ -148,7 +149,10 @@ def main() -> None:
     writer.add("noise_encoder", state["noise_encoder.weight"])
     for index in range(int(config["ck_suffix_layers"])):
         export_block(writer, state, f"finite_blocks.{index}", f"finite.blocks.{index}", int(config["heads"]))
-        writer.add(f"finite.lateral_adapters.{index}", state[f"lateral_adapters.{index}.weight"])
+        writer.add(f"finite.lateral.outputs.{index}", state[f"all_depth_lateral.outputs.{index}.weight"])
+    for index in range(int(config["depth"])):
+        writer.add(f"finite.lateral.projections.{index}", state[f"all_depth_lateral.projections.{index}.weight"])
+    writer.add("finite.lateral.mixing", state["all_depth_lateral.mixing"])
     for index in range(int(config["endpoint_update_layers"])):
         writer.add(
             f"finite.endpoint_updates.{index}",
@@ -160,13 +164,14 @@ def main() -> None:
     weights_path = args.output / f"weights.{suffix}"
     weights_path.write_bytes(writer.payload)
     manifest = {
-        "format": "wsfmdock_webgpu_v6",
+        "format": "wsfmdock_webgpu_v7",
         "method": checkpoint["method"],
         "stage": checkpoint["stage"],
         "iteration": int(checkpoint["iteration"]),
         "checkpoint_sha256": hashlib.sha256(checkpoint_bytes).hexdigest(),
         "weight_file": weights_path.name,
         "weight_bytes": len(writer.payload),
+        "weight_sha256": hashlib.sha256(writer.payload).hexdigest(),
         "weight_precision": args.precision,
         "activation_precision": args.precision,
         "accumulation_precision": "float32",
@@ -174,6 +179,7 @@ def main() -> None:
         "embedding_offsets": {"atomic": 0, "role": 128, "residue": 133, "atom_name": 154},
         "endpoint_block_indices": [7, 9, 11],
         "finite_start_block": 7,
+        "lateral_width": checkpoint["lateral_width"],
         "sampling": {"initial_molecule_scale": 10.0, "process_molecule_scale": 1.0,
                      "sidechain_scale": 0.5},
         "time_frequencies": state["local.time_features.weight"].tolist(),

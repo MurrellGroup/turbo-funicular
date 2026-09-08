@@ -65,6 +65,9 @@ export class WeightStore {
     if (encoded.byteLength !== manifest.weight_bytes) {
       throw new Error(`Weight byte count differs: ${encoded.byteLength} != ${manifest.weight_bytes}`);
     }
+    const digest = await crypto.subtle.digest("SHA-256", encoded);
+    const sha256 = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (sha256 !== manifest.weight_sha256) throw new Error("Model weight checksum differs.");
     const buffers = new Map();
     for (const [name, entry] of Object.entries(manifest.tensors)) {
       const bytes = new Uint8Array(encoded, entry.offset, entry.bytes);
@@ -761,6 +764,38 @@ fn main(@builtin(global_invocation_id) global: vec3<u32>) {
     + (1.0 - tau) * increment[index];
 }`;
 
+const LATERAL_MIX = /* wgsl */ `
+struct Params { dims: vec4<u32> };
+@group(0) @binding(0) var<storage, read> projected: array<f32>;
+@group(0) @binding(1) var<storage, read> weights: array<f32>;
+@group(0) @binding(2) var<storage, read_write> a: array<f32>;
+@group(0) @binding(3) var<storage, read_write> b: array<f32>;
+@group(0) @binding(4) var<storage, read_write> c: array<f32>;
+@group(0) @binding(5) var<storage, read_write> d: array<f32>;
+@group(0) @binding(6) var<storage, read_write> e: array<f32>;
+@group(0) @binding(7) var<uniform> params: Params;
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) global: vec3<u32>) {
+  let i = global.x;
+  if (i >= params.dims.x) { return; }
+  let stride = params.dims.y * params.dims.z;
+  let offset = params.dims.w * params.dims.y + i % params.dims.y;
+  let x = projected[i];
+  if (params.dims.w == 0u) {
+    a[i] = x * weights[offset];
+    b[i] = x * weights[stride + offset];
+    c[i] = x * weights[2u * stride + offset];
+    d[i] = x * weights[3u * stride + offset];
+    e[i] = x * weights[4u * stride + offset];
+  } else {
+    a[i] += x * weights[offset];
+    b[i] += x * weights[stride + offset];
+    c[i] += x * weights[2u * stride + offset];
+    d[i] += x * weights[3u * stride + offset];
+    e[i] += x * weights[4u * stride + offset];
+  }
+}`;
+
 export class Kernels {
   static async create(device, precision = "float32") {
     const definitions = {
@@ -783,6 +818,7 @@ export class Kernels {
       noiseInput: NOISE_INPUT,
       secant: SECANT,
       finalState: FINAL_STATE,
+      lateralMix: LATERAL_MIX,
     };
     const pipelines = {};
     const unavailablePipelines = {};
@@ -841,7 +877,7 @@ export class Kernels {
     this.registerShapes = new Set();
     this.tuning = [];
     if (!this.pipelines.matmulRegister) return;
-    for (const [columns, inner] of [[2016, 408], [4080, 408], [408, 2040], [408, 888], [408, 408]]) {
+    for (const [columns, inner] of [[2016, 408], [4080, 408], [408, 2040], [408, 888], [1024, 408], [408, 1024]]) {
       const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC;
       const values = count => Float32Array.from({ length: count }, (_, i) => Math.sin(i * 0.37) * 0.05);
       const a = uploadBuffer(device, values(rows * inner), usage, "tune input");
