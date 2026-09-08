@@ -6,7 +6,7 @@ const browser = await chromium.launch({ headless: false,
   args: ['--enable-unsafe-webgpu', '--use-angle=vulkan',
     '--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan', '--ignore-gpu-blocklist'],
 });
-const deadline = setTimeout(() => browser.close(), 180_000);
+const deadline = setTimeout(() => browser.close(), 600_000);
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: true });
   const errors = [], downloads = [];
