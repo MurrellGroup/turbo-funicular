@@ -10,6 +10,15 @@ const ELEMENT_COLORS = new Map([
 ]);
 const ELEMENT_RADII = new Map([[6, 0.23], [7, 0.24], [8, 0.25], [9, 0.25], [15, 0.29], [16, 0.29], [17, 0.30]]);
 const BACKBONE_RADII = new Map([[6, 0.072], [7, 0.078], [8, 0.082], [16, 0.085]]);
+const CHAIN_COLORS = [0x63cdb5, 0xd98bd3, 0x70a9ee, 0xf3bd68, 0xb9d76e, 0xee8f99, 0xa7a0f1, 0x6dd3df];
+const ATOM_SIZE = 1.35;
+const BOND_SIZE = 1.4;
+const HIGHLIGHT = new THREE.Color(0xffc533);
+const residueKey = (sample, atom) => {
+  const label = sample.atom_labels?.[atom]?.split('|');
+  return label?.length === 5 ? JSON.stringify(label.slice(2)) : String(sample.residue_ids[atom]);
+};
+const chainKey = (sample, atom) => sample.atom_labels?.[atom]?.split('|')[2] ?? String(sample.chain_ids?.[atom] ?? '');
 
 const axis = new THREE.Vector3(0, 1, 0);
 const a = new THREE.Vector3();
@@ -27,7 +36,7 @@ function atomPosition(coords, atom, target) {
 
 function atomMatrix(mesh, instance, coords, atom, radius) {
   atomPosition(coords, atom, a);
-  matrix.compose(a, quaternion.identity(), scale.setScalar(radius));
+  matrix.compose(a, quaternion.identity(), scale.setScalar(radius * ATOM_SIZE));
   mesh.setMatrixAt(instance, matrix);
 }
 
@@ -39,7 +48,7 @@ function bondMatrix(mesh, instance, coords, first, second, radius) {
   if (length < 1e-6) return false;
   midpoint.copy(a).add(b).multiplyScalar(0.5);
   quaternion.setFromUnitVectors(axis, delta.multiplyScalar(1 / length));
-  matrix.compose(midpoint, quaternion, scale.set(radius, length, radius));
+  matrix.compose(midpoint, quaternion, scale.set(radius * BOND_SIZE, length, radius * BOND_SIZE));
   mesh.setMatrixAt(instance, matrix);
   return true;
 }
@@ -148,6 +157,7 @@ export class MolecularViewer {
     this.backbonePickAtoms = []; this.sideBondPickAtoms = [];
     this.backbone = null; this.sideBonds = null;
     this.referenceVisible = false;
+    this.proteinColorMode = 'role'; this.highlightedResidues = new Set(); this.chainColors = new Map();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.animateFrame = this.animateFrame.bind(this);
@@ -170,24 +180,28 @@ export class MolecularViewer {
   setSample(sample, coords, preserveCamera = false) {
     this.clear();
     this.sample = sample;
+    this.atomResidueKeys = sample.roles.map((_, i) => residueKey(sample, i));
+    this.atomChainKeys = sample.roles.map((_, i) => chainKey(sample, i));
+    const chains = [...new Set(sample.roles.flatMap((role, i) => [1, 2].includes(role) ? [chainKey(sample, i)] : []))].sort();
+    this.chainColors = new Map(chains.map((id, i) => [id, new THREE.Color(CHAIN_COLORS[i % CHAIN_COLORS.length])]));
     this.group = new THREE.Group();
     this.scene.add(this.group);
     const sphere = new THREE.SphereGeometry(1, 9, 7);
     const cylinder = new THREE.CylinderGeometry(1, 1, 1, 7, 1, false);
     this.backbonePairs = fullBackbonePairs(sample);
-    this.backbone = new THREE.InstancedMesh(cylinder, material(0x737d7b, 0.72), this.backbonePairs.length);
+    this.backbone = new THREE.InstancedMesh(cylinder, material(0xffffff, 0.85), this.backbonePairs.length);
     this.backboneByElement = groupedAtoms(sample, ROLE_BACKBONE);
     this.backboneMeshes = [...this.backboneByElement].map(([element, atoms]) => ({
       element,
       atoms,
       mesh: new THREE.InstancedMesh(
         sphere,
-        material(ELEMENT_COLORS.get(element) ?? 0x929a98, 0.68),
+        material(0xffffff, 0.9),
         atoms.length,
       ),
     }));
-    this.sideAtoms = new THREE.InstancedMesh(sphere, material(0x52bca8, 0.84), sample.roles.filter((role) => role === ROLE_SIDECHAIN).length);
-    this.sideBonds = new THREE.InstancedMesh(cylinder, material(0x3e9e8d, 0.76), sample.sidechain_bonds.length);
+    this.sideAtoms = new THREE.InstancedMesh(sphere, material(0xffffff, 0.9), sample.roles.filter((role) => role === ROLE_SIDECHAIN).length);
+    this.sideBonds = new THREE.InstancedMesh(cylinder, material(0xffffff, 0.85), sample.sidechain_bonds.length);
     this.moleculePairs = [...sample.ligand_bonds, ...sample.molecule_bonds];
     this.ligandBonds = new THREE.InstancedMesh(cylinder, material(0xd65358), this.moleculePairs.length);
     this.ligandByElement = groupedAtoms(sample, ROLE_LIGAND);
@@ -243,22 +257,47 @@ export class MolecularViewer {
     this.sidechainAtoms = sample.roles.flatMap((role, atom) => role === ROLE_SIDECHAIN ? [atom] : []);
     this.update(coords);
     if (!preserveCamera) this.resetCamera();
+    this.onSampleChange?.();
   }
 
-  highlightResidues(ids) {
+  highlightResidues(ids, source = this.sample) {
+    this.highlightedResidues = new Set();
+    if (source) source.roles.forEach((role, atom) => {
+      if ([1, 2].includes(role) && ids.has(source.residue_ids[atom])) this.highlightedResidues.add(residueKey(source, atom));
+    });
+    this.updateProteinColors();
+  }
+
+  setProteinColorMode(mode) {
+    this.proteinColorMode = mode === 'chain' ? 'chain' : 'role';
+    this.updateProteinColors(); this.onSampleChange?.();
+  }
+
+  updateProteinColors() {
     if (!this.sample) return;
-    for (const { mesh, atoms } of [...this.backboneMeshes, { mesh: this.sideAtoms, atoms: this.sidechainAtoms }]) {
-      atoms.forEach((atom, i) => mesh.setColorAt(i, this.selectionColor(ids.has(this.sample.residue_ids[atom]))));
+    const color = new THREE.Color();
+    const selected = atom => this.highlightedResidues.has(this.atomResidueKeys[atom]);
+    const paint = (mesh, atoms, fallback, pairs) => {
+      atoms.forEach((atom, i) => {
+        const active = selected(atom) || (pairs && selected(pairs[i][1]));
+        mesh.setColorAt(i, active ? HIGHLIGHT : this.proteinColorMode === 'chain'
+          ? this.chainColors.get(this.atomChainKeys[atom]) : color.set(fallback));
+      });
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    }
+    };
+    for (const { mesh, atoms, element } of this.backboneMeshes) paint(mesh, atoms, ELEMENT_COLORS.get(element) ?? 0x929a98);
+    paint(this.sideAtoms, this.sidechainAtoms, 0x52bca8);
+    paint(this.backbone, this.backbonePickAtoms, 0x737d7b, this.drawnBackbonePairs);
+    paint(this.sideBonds, this.sideBondPickAtoms, 0x3e9e8d, this.drawnSidePairs);
   }
 
   update(coords) {
     if (!this.sample) return;
     let cursor = 0;
     this.backbonePickAtoms = [];
+    this.drawnBackbonePairs = [];
     for (const [first, second] of this.backbonePairs) {
-      if (bondMatrix(this.backbone, cursor, coords, first, second, 0.038)) { this.backbonePickAtoms.push(first); cursor += 1; }
+      if (bondMatrix(this.backbone, cursor, coords, first, second, 0.038)) { this.backbonePickAtoms.push(first); this.drawnBackbonePairs.push([first, second]); cursor += 1; }
     }
     this.backbone.count = cursor;
     this.backbone.instanceMatrix.needsUpdate = true;
@@ -281,8 +320,9 @@ export class MolecularViewer {
     this.sideAtoms.boundingSphere = null;
     cursor = 0;
     this.sideBondPickAtoms = [];
+    this.drawnSidePairs = [];
     for (const [first, second] of this.sample.sidechain_bonds) {
-      if (bondMatrix(this.sideBonds, cursor, coords, first, second, 0.038)) { this.sideBondPickAtoms.push(first); cursor += 1; }
+      if (bondMatrix(this.sideBonds, cursor, coords, first, second, 0.038)) { this.sideBondPickAtoms.push(first); this.drawnSidePairs.push([first, second]); cursor += 1; }
     }
     this.sideBonds.count = cursor;
     this.sideBonds.instanceMatrix.needsUpdate = true;
@@ -298,6 +338,7 @@ export class MolecularViewer {
       mesh.instanceMatrix.needsUpdate = true;
       mesh.boundingSphere = null;
     }
+    this.updateProteinColors();
   }
 
   setReferenceVisible(visible) {

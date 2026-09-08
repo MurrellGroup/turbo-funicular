@@ -10,6 +10,7 @@
     "build": "vite build",
     "test:prep": "node --test tests/prep.mjs tests/sequence.mjs tests/mpnn.mjs",
     "test:campaign": "node tests/campaign_browser.mjs",
+    "test:sequence-display": "node tests/sequence_display_browser.mjs",
     "test:mpnn": "node tests/mpnn_browser.mjs",
     "test:assembly": "node tests/assembly.mjs",
     "test:glycan": "node tests/browser_glycan.mjs",

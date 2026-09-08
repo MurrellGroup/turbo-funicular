@@ -114,6 +114,8 @@
           <p id="result-identities" class="structure-label"></p>
         </section>
         <button id="reset-camera" class="secondary" type="button" disabled>Reset view</button>
+        <label>Protein color<select id="protein-color"><option value="role">Atom role</option><option value="chain">Chain</option></select></label>
+        <div id="chain-colors" class="chain-colors" hidden></div>
         <label class="toggle-row">
           <input id="show-reference" type="checkbox" />
           <span>Reference pose</span>
@@ -146,6 +148,7 @@
         <div id="sequence-grid" aria-label="Sequence alignment"></div>
         <div class="sequence-actions">
           <button id="swap-selected" type="button" disabled>Swap selected</button>
+          <button id="swap-all" type="button" disabled>Swap all</button>
           <select id="residue-identity" aria-label="Residue identity"></select>
           <button id="set-identity" type="button" disabled>Set identity</button>
           <button id="clear-edits" class="secondary" type="button" disabled>Clear edits</button>

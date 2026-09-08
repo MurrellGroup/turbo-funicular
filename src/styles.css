@@ -186,7 +186,10 @@ textarea { background: #0d1011; color: #e4e8e7; border: 1px solid #3a4242; borde
 .residue-cell.selected { border-color: #f5c465; }
 .residue-cell.unaligned { color: #85918c; }
 .residue-cell:disabled { opacity: 0.5; cursor: default; }
-.sequence-actions { display: grid; grid-template-columns: 1fr 130px 1fr 1fr; gap: 8px; align-items: center; }
+.sequence-actions { display: grid; grid-template-columns: 1fr 1fr 130px 1fr 1fr; gap: 8px; align-items: center; }
+.chain-colors { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 8px; font-size: 12px; }
+.chain-colors span { display: inline-flex; align-items: center; gap: 5px; }
+.chain-colors i { width: 10px; height: 10px; border-radius: 50%; }
 .sequence-actions button { height: 36px; margin: 0; font-size: 12px; }
 
 @media (max-width: 1050px) {

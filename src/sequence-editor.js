@@ -4,9 +4,10 @@ export class SequenceEditor {
   constructor({ onChange, onSelect, onError }) {
     this.onChange = onChange; this.onSelect = onSelect; this.onError = onError;
     this.edits = new Map(); this.selected = new Set(); this.results = new Map();
+    this.chainSelections = new Map();
     this.ui = Object.fromEntries(['sequence-panel', 'sequence-chain', 'sequence-input', 'sequence-file',
       'open-sequence', 'align-sequence', 'sequence-record', 'sequence-grid', 'alignment-status',
-      'residue-identity', 'set-identity', 'swap-selected', 'clear-edits', 'selected-residues', 'close-sequence',
+      'residue-identity', 'set-identity', 'swap-selected', 'swap-all', 'clear-edits', 'selected-residues', 'close-sequence',
       'edit-sequence', 'mutation-list'].map(id => [id, document.getElementById(id)]));
     const u = this.ui;
     for (const aa of AMINO_ACIDS + 'X') u['residue-identity'].add(new Option(aa === 'X' ? 'X / Random' : `${aa} / ${AA_NAMES[aa]}`, aa));
@@ -21,12 +22,17 @@ export class SequenceEditor {
     u['align-sequence'].onclick = () => this.align().catch(e => onError(e.message));
     u['sequence-input'].oninput = () => { this.cancelMapping(); this.results.clear(); this.selected.clear(); this.render(); };
     u['sequence-record'].onchange = () => this.mapRecord().catch(e => onError(e.message));
-    u['sequence-chain'].onchange = () => { this.selected.clear(); this.render(); };
+    u['sequence-chain'].onchange = () => this.switchChain(u['sequence-chain'].value);
     u['set-identity'].onclick = () => this.commit([...this.selected].map(id => [id, u['residue-identity'].value]));
     u['swap-selected'].onclick = () => {
       const result = this.results.get(u['sequence-chain'].value);
       this.commit((result?.columns ?? []).filter(c => c.mapped && c.residue && this.selected.has(c.residue.id)
         && c.input !== c.reference).map(c => [c.residue.id, c.input]));
+    };
+    u['swap-all'].onclick = () => {
+      const result = this.results.get(u['sequence-chain'].value);
+      this.commit((result?.columns ?? []).filter(c => c.mapped && c.residue && c.input !== c.reference)
+        .map(c => [c.residue.id, c.input]));
     };
     u['clear-edits'].onclick = () => { this.edits.clear(); this.render(); onChange(this.edits); };
     u['close-sequence'].onclick = () => { u['sequence-panel'].hidden = true; };
@@ -36,9 +42,11 @@ export class SequenceEditor {
   setSample(sample) {
     if (this.sample === sample) { this.setBusy(false); return; }
     this.cancelMapping();
-    this.sample = sample; this.edits = new Map(); this.selected.clear(); this.results.clear();
+    this.sample = sample; this.edits = new Map(); this.selected = new Set(); this.results.clear();
+    this.chainSelections.clear(); this.activeChain = undefined; this.lastSelected = undefined;
     this.chains = sample ? proteinChains(sample) : [];
     this.ui['sequence-chain'].replaceChildren(...this.chains.map(c => new Option(`${c.id || '-'} / ${c.residues.length} residues`, c.id)));
+    this.switchChain(this.ui['sequence-chain'].value, false);
     if (!this.chains.length) this.ui['sequence-panel'].hidden = true;
     this.setBusy(false); this.render();
   }
@@ -81,18 +89,34 @@ export class SequenceEditor {
     if (!result) return;
     this.results = new Map(result.map(r => [r.id, r]));
     const best = [...result].sort((a, b) => b.score - a.score)[0];
-    if (best) this.ui['sequence-chain'].value = best.id;
-    this.selected.clear(); this.render();
+    if (best) this.switchChain(best.id, false);
+    this.render();
+  }
+
+  switchChain(id, render = true) {
+    if (this.activeChain !== undefined) this.chainSelections.set(this.activeChain, this.selected);
+    this.activeChain = id;
+    this.ui['sequence-chain'].value = id;
+    this.selected = this.chainSelections.get(id) ?? new Set();
+    this.lastSelected = undefined;
+    if (render) this.render();
   }
 
   pick(atom, displayedSample) {
     if (!this.sample || this.busy || ![1, 2].includes(displayedSample.roles[atom])) return;
-    const id = displayedSample.residue_ids[atom];
-    const chain = this.chains.find(c => c.residues.some(r => r.id === id));
-    if (!chain) return;
+    // Flattened IDs can differ between the selection preview and prepared sample.
+    const label = displayedSample.atom_labels?.[atom]?.split('|');
+    if (label?.length !== 5) return;
+    const chain = this.chains.find(c => c.id === label[2]);
+    const residue = chain?.residues.find(r => {
+      const original = this.sample.atom_labels[r.atoms[0]].split('|');
+      return original[3] === label[3] && original[4] === label[4];
+    });
+    if (!residue) return;
+    const id = residue.id;
     this.ui['sequence-panel'].hidden = false;
-    this.ui['sequence-chain'].value = chain.id;
-    this.selected = new Set([id]); this.render();
+    this.switchChain(chain.id, false);
+    this.selected.add(id); this.lastSelected = id; this.render();
     this.ui['sequence-grid'].querySelector(`[data-residue="${id}"]`)?.scrollIntoView({ block: 'nearest', inline: 'center' });
   }
 
@@ -119,6 +143,7 @@ export class SequenceEditor {
     const columns = this.results.get(this.ui['sequence-chain'].value)?.columns ?? [];
     this.ui['swap-selected'].disabled = this.busy || !columns.some(c => c.mapped && c.residue
       && this.selected.has(c.residue.id) && c.input !== c.reference);
+    this.ui['swap-all'].disabled = this.busy || !columns.some(c => c.mapped && c.residue && c.input !== c.reference);
     this.ui['clear-edits'].disabled = this.busy || !this.edits.size;
     this.onSelect(this.selected);
   }

@@ -20,6 +20,7 @@ const ui = Object.fromEntries([
   "example-tab", "custom-tab", "example-panel", "custom-panel", "pdb-input",
   "open-pdb", "chain-list", "ligand-list", "selection-count", "prepare-selection", "smiles-input", "replace-ligand", "structure-label",
   "pdb-id-input", "fetch-pdb", "show-reference",
+  "protein-color", "chain-colors",
   "active-ligand", "remove-ligand",
   "campaign-count", "run-campaign", "stop-campaign", "campaign-results", "campaign-result",
   "previous-result", "next-result", "download-result", "result-identities",
@@ -50,13 +51,13 @@ const editor = new SequenceEditor({
     if (preparedBase) {
       const preview = mutateSample(preparedBase, editor.edits, Number(ui['seed-input'].value) || 1).sample;
       viewer.setSample(preview, new Float32Array(preview.target_coords.flat()), true);
-      viewer.highlightResidues(editor.selected); activeHighlight();
+      viewer.highlightResidues(editor.selected, editor.sample); activeHighlight();
       ui['atom-count'].textContent = preview.atoms.toLocaleString();
     }
     setStatus(`${editor.edits.size} residue edits`);
     mpnnControls?.refresh();
   },
-  onSelect: ids => viewer.highlightResidues(ids),
+  onSelect: ids => viewer.highlightResidues(ids, editor.sample),
   onError: message => { setStatus(message); document.getElementById('alignment-status').textContent = message; },
 });
 mpnnControls = new MpnnControls({
@@ -65,6 +66,15 @@ mpnnControls = new MpnnControls({
   onSuggest: () => suggestResidues(),
 });
 createIcons({ icons: { ChevronLeft, ChevronRight, Download, Upload, X } });
+viewer.onSampleChange = () => {
+  ui['chain-colors'].hidden = viewer.proteinColorMode !== 'chain';
+  ui['chain-colors'].replaceChildren(...[...viewer.chainColors].map(([id, color]) => {
+    const entry = document.createElement('span'), swatch = document.createElement('i');
+    swatch.style.backgroundColor = `#${color.getHexString()}`;
+    entry.append(swatch, document.createTextNode(id || '(blank)')); return entry;
+  }));
+};
+ui['protein-color'].onchange = () => viewer.setProteinColorMode(ui['protein-color'].value);
 const ligandLabel = g => `${g.options[0].atoms[0].rawResidue}${g.options.length > 1 ? ` +${g.options.length - 1}` : ''} / ${g.options[0].atoms[0].chain} (${g.atoms})`;
 
 function clearCampaign() {
