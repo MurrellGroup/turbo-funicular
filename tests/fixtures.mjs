@@ -96,3 +96,13 @@ BEN SMILES_CANONICAL RDKit 2026.03.5 c1ccccc1
 #
 `;
 }
+
+export function mpnnFixture() {
+  const ala = miniPdb().split('\n').filter(l => l.startsWith('ATOM') && Number(l.slice(22, 26)) === 1);
+  const records = [['A', -2, ''], ['A', 0, ''], ['A', 1, 'A'], ['A', 1, 'B'], ['A', 4, ''],
+    ['B', 101, ''], ['B', 102, ''], ['B', 104, '']];
+  return records.flatMap(([chain, number, insertion], k) => ala.map((line, i) =>
+    line.slice(0, 6) + String(k * 5 + i + 1).padStart(5) + line.slice(11, 21) + chain
+    + String(number).padStart(4) + (insertion || ' ') + line.slice(27, 30)
+    + (Number(line.slice(30, 38)) + k * 3).toFixed(3).padStart(8) + line.slice(38))).join('\n');
+}

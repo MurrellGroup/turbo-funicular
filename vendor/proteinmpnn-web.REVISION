@@ -1,0 +1,6 @@
+Repository: https://github.com/MurrellGroup/webProteinMPNN
+Commit: 10849c13a9af990edeb9dc45ff15f764971d6f82
+Package: proteinmpnn-web-0.1.0.tgz
+Package SHA1: 96a88da48f202177501a61862e57caaa8cc2af50
+Build: npm ci && npm pack
+Source modifications: none

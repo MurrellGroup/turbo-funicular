@@ -4,6 +4,7 @@ __pycache__/
 dist/
 public/assets/model/
 public/assets/parity/
+public/ort/
 test-results/
 test-results*.png
 screenshots-*.png

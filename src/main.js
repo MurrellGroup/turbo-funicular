@@ -10,6 +10,8 @@ import { structureChoices, selectedStructure, previewStructure } from './selecti
 import { SequenceEditor } from './sequence-editor.js';
 import { mutateSample, proteinChains } from './sequence.js';
 import { createIcons, ChevronLeft, ChevronRight, Download, Upload, X } from 'lucide';
+import { MpnnControls } from './mpnn-controls.js';
+import { MpnnProposals } from './mpnn.js';
 
 const ui = Object.fromEntries([
   "device-dot", "device-label", "sample-select", "step-select", "seed-input",
@@ -41,6 +43,8 @@ let replacements = new Map(), previewGeneration = 0;
 let previewGraphs = new Map();
 let campaign = [], cancelCampaign = false;
 let preparedBase = null;
+const mpnn = new MpnnProposals();
+let mpnnControls;
 const editor = new SequenceEditor({
   onChange: () => {
     if (preparedBase) {
@@ -50,9 +54,15 @@ const editor = new SequenceEditor({
       ui['atom-count'].textContent = preview.atoms.toLocaleString();
     }
     setStatus(`${editor.edits.size} residue edits`);
+    mpnnControls?.refresh();
   },
   onSelect: ids => viewer.highlightResidues(ids),
   onError: message => { setStatus(message); document.getElementById('alignment-status').textContent = message; },
+});
+mpnnControls = new MpnnControls({
+  getInput: () => ({ sample: ui['custom-panel'].hidden ? null : preparedBase, edits: editor.edits }),
+  onError: message => { mpnnControls.status(message); setStatus(message); },
+  onSuggest: () => suggestResidues(),
 });
 createIcons({ icons: { ChevronLeft, ChevronRight, Download, Upload, X } });
 const ligandLabel = g => `${g.options[0].atoms[0].rawResidue}${g.options.length > 1 ? ` +${g.options.length - 1}` : ''} / ${g.options[0].atoms[0].chain} (${g.atoms})`;
@@ -133,6 +143,7 @@ function setSourceMode(mode) {
   ui["custom-tab"].setAttribute("aria-selected", String(!example));
   ui["example-panel"].hidden = !example;
   ui["custom-panel"].hidden = example;
+  mpnnControls.setBusy(inputBusy || running);
 }
 
 function setInputBusy(busy) {
@@ -144,6 +155,7 @@ function setInputBusy(busy) {
   ui['run-campaign'].disabled = busy || !modelReady;
   for (const id of ['step-select', 'seed-input', 'campaign-count', 'campaign-result', 'previous-result', 'next-result', 'download-result']) ui[id].disabled = busy;
   editor.setBusy(busy || !modelReady || ui['custom-panel'].hidden);
+  mpnnControls.setBusy(busy || !modelReady);
   ui['prepare-selection'].disabled = busy || !pdbStructure;
   ui['active-ligand'].disabled = busy || !keptLigands.size;
   ui['remove-ligand'].disabled = busy || !keptLigands.size;
@@ -160,6 +172,7 @@ function selectionPreview() {
   customSample = null;
   preparedBase = null;
   editor.setSample(null);
+  mpnnControls.setBusy(true);
   ui['run-button'].disabled = true;
   ui['run-campaign'].disabled = true;
   const subset = selectedStructure(pdbStructure, choices, keptChains, keptLigands);
@@ -351,19 +364,41 @@ function selectResult(index) {
   activeHighlight();
 }
 
+async function suggestResidues() {
+  if (running || inputBusy || !preparedBase) return;
+  let settings;
+  try { settings = mpnnControls.settings(); } catch (e) { mpnnControls.status(e.message); return; }
+  const seed = Number(ui['seed-input'].value);
+  if (!Number.isInteger(seed) || seed < 1 || seed > 4294967295) { setStatus('Invalid seed.'); return; }
+  setInputBusy(true); cancelCampaign = false; ui['stop-campaign'].hidden = false;
+  try {
+    const result = await mpnn.sample(preparedBase, new Map(editor.edits), settings, 1, seed,
+      text => { mpnnControls.status(text); setStatus(text); });
+    if (cancelCampaign) return;
+    editor.setBusy(false);
+    editor.commit([...result.proposals[0].edits]);
+    mpnnControls.status(`Sequence ready / ${result.proposals[0].metadata.provider}`);
+  } catch (error) { mpnnControls.status(error.message); setStatus(error.message); }
+  finally { ui['stop-campaign'].hidden = true; setInputBusy(false); }
+}
+
 async function runSamples(count) {
-  if (running || !modelReady) return;
+  if (running || inputBusy || !modelReady) return;
   const base = !ui['custom-panel'].hidden && preparedBase ? preparedBase : sample;
   const edits = base === preparedBase ? new Map(editor.edits) : new Map();
+  const useMpnn = mpnnControls.enabled && base === preparedBase && [...edits.values()].includes('X');
+  let mpnnSettings;
   const seed = Number(ui['seed-input'].value);
   const steps = Number(ui['step-select'].value);
   if (!Number.isInteger(count) || count < 1 || count > 200) { setStatus('Samples must be an integer from 1 to 200.'); return; }
   if (!Number.isSafeInteger(seed) || seed < 1 || seed + count > 4294967296) { setStatus('Seed must be a positive 32-bit integer.'); return; }
   // Validate every randomized topology before launching, without retaining N full graphs.
   try {
+    if (useMpnn) mpnnSettings = mpnnControls.settings();
     let bytes = 0;
     for (let index = 0; index < count; index++) {
-      const next = mutateSample(base, edits, seed + index).sample;
+      const checkedEdits = useMpnn ? new Map([...edits].map(([id, aa]) => [id, aa === 'X' ? 'W' : aa])) : edits;
+      const next = mutateSample(base, checkedEdits, seed + index).sample;
       if (next.atoms > model.maximumAtoms) throw new Error(`Sample ${index + 1} exceeds the ${model.maximumAtoms}-atom adapter limit.`);
       bytes += next.atoms * (edits.size ? 1400 : 12);
       if (bytes > 512 * 2 ** 20) throw new Error('Campaign exceeds the 512 MiB result budget. Reduce the sample count.');
@@ -378,8 +413,17 @@ async function runSamples(count) {
   let previous;
   const started = performance.now();
   try {
+    let proposals;
+    if (useMpnn) {
+      const result = await mpnn.sample(base, edits, mpnnSettings, count, seed,
+        text => { mpnnControls.status(text); setStatus(text); });
+      proposals = result.proposals;
+      for (const proposal of proposals) proposal.metadata.residueMapping = result.mapping;
+      mpnnControls.status(`${proposals.length} sequences ready / ${proposals[0].metadata.provider}`);
+      if (cancelCampaign) return;
+    }
     for (let member = 0; member < count && !cancelCampaign; member++) {
-      const { sample: nextSample, resolved } = mutateSample(base, edits, seed + member);
+      const { sample: nextSample, resolved } = mutateSample(base, proposals?.[member].edits ?? edits, seed + member);
       if (sample !== nextSample) await applySample(nextSample, 'Ready', true);
       // applySample enables commands for interactive preparation; keep them locked during a campaign.
       setInputBusy(true);
@@ -409,7 +453,8 @@ async function runSamples(count) {
       const identities = proteinChains(base).flatMap(c => c.residues.filter(r => resolved.has(r.id))
         .map(r => `${c.id}:${r.aa}${r.number}${resolved.get(r.id)}`));
       campaign.push({ sample: nextSample, coords: previous.slice(), seed: seed + member, steps, identities,
-        resolved: Object.fromEntries(resolved), checkpoint: model.weights.manifest.checkpoint_sha256 });
+        resolved: Object.fromEntries(resolved), checkpoint: model.weights.manifest.checkpoint_sha256,
+        ...(proposals ? { mpnn: proposals[member].metadata } : {}) });
       ui['campaign-result'].add(new Option(`${member + 1} / seed ${seed + member}`, String(member)));
       ui['campaign-results'].hidden = false;
     }
@@ -417,8 +462,9 @@ async function runSamples(count) {
     ui["total-time"].textContent = `${(total / 1000).toFixed(2)} s`;
     setStatus(cancelCampaign ? `Stopped. ${campaign.length} samples completed.` : `Inference complete. ${campaign.length} samples / ${steps} steps.`);
   } catch (error) {
-    console.error(error);
-    setStatus(`Inference failed: ${error.message}`);
+    if (!error.cancelled) console.error(error);
+    setStatus(error.cancelled ? 'Campaign stopped.' : `Inference failed: ${error.message}`);
+    if (useMpnn) mpnnControls.status(error.message);
   } finally {
     running = false;
     ui['stop-campaign'].hidden = true;
@@ -489,7 +535,7 @@ async function initialize() {
 
 ui["run-button"].addEventListener("click", runInference);
 ui['run-campaign'].addEventListener('click', () => runSamples(Number(ui['campaign-count'].value)));
-ui['stop-campaign'].addEventListener('click', () => { cancelCampaign = true; });
+ui['stop-campaign'].addEventListener('click', () => { cancelCampaign = true; mpnn.cancel(); });
 ui['campaign-result'].addEventListener('change', () => selectResult(Number(ui['campaign-result'].value)));
 ui['previous-result'].addEventListener('click', () => selectResult(Number(ui['campaign-result'].value) - 1));
 ui['next-result'].addEventListener('click', () => selectResult(Number(ui['campaign-result'].value) + 1));
@@ -562,6 +608,7 @@ for (const type of ["dragleave", "drop"]) {
   });
 }
 document.addEventListener("drop", (event) => {
+  if (running || inputBusy) return;
   const file = [...event.dataTransfer.files].find((entry) => /\.(pdb|ent|cif|mmcif)$/i.test(entry.name));
   if (file) preparePdbFile(file).catch(() => {});
 });
@@ -581,6 +628,8 @@ window.__wsfmdock = {
   get sample() { return sample; },
   get editor() { return editor; },
   get campaign() { return campaign; },
+  get mpnn() { return mpnn; },
+  get mpnnControls() { return mpnnControls; },
   async loadSample(file) { return loadSample(file); },
   async loadPdbText(text, filename) { return preparePdb(text, filename); },
   async fetchPdb(pdbId) { return fetchPdb(pdbId); },

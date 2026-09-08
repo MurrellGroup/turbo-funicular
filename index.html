@@ -77,6 +77,32 @@
           <label>Samples<input id="campaign-count" type="number" value="8" min="1" max="200" step="1" /></label>
           <button id="run-campaign" type="button" disabled>Run campaign</button>
         </div>
+        <label class="toggle-row"><input id="mpnn-enable" type="checkbox" disabled /><span>ProteinMPNN proposals</span></label>
+        <section id="mpnn-options" hidden>
+          <label>MPNN model<select id="mpnn-model"></select></label>
+          <div class="field-row">
+            <label>Temperature<input id="mpnn-temperature" type="number" min="0.001" step="0.05" value="0.1" /></label>
+            <label>Backbone noise (A)<input id="mpnn-noise" type="number" min="0" step="0.01" value="0" /></label>
+          </div>
+          <label class="toggle-row"><input id="mpnn-fresh-noise" type="checkbox" /><span>Fresh noise per sequence</span></label>
+          <details><summary>MPNN options</summary>
+            <label>Execution<select id="mpnn-backend"><option value="auto">Auto</option><option value="wasm">WASM</option><option value="webgpu">WebGPU</option></select></label>
+            <div class="field-row">
+              <label>Threads<input id="mpnn-threads" type="number" min="1" step="1" value="1" /></label>
+              <label>Sequence batch<input id="mpnn-batch" type="number" min="1" max="16" step="1" value="1" /></label>
+            </div>
+            <label>Omit amino acids<input id="mpnn-omit" type="text" value="X" spellcheck="false" /></label>
+            <label>Constraints (JSON)<textarea id="mpnn-constraints" rows="4" spellcheck="false">{}</textarea></label>
+            <div class="mpnn-file-actions">
+              <input id="mpnn-constraint-file" type="file" accept=".json" hidden />
+              <button id="mpnn-open-constraints" type="button" class="secondary icon-button" title="Upload constraints" aria-label="Upload constraints"><i data-lucide="upload"></i></button>
+              <button id="mpnn-map" type="button" class="secondary icon-button" title="Download residue map" aria-label="Download residue map"><i data-lucide="download"></i></button>
+            </div>
+          </details>
+          <p id="mpnn-context" class="structure-label"></p>
+          <button id="mpnn-suggest" type="button" class="secondary" disabled>Suggest X residues</button>
+          <p id="mpnn-status" class="structure-label" role="status"></p>
+        </section>
         <button id="stop-campaign" class="secondary" type="button" hidden>Stop</button>
         <section id="campaign-results" hidden>
           <div class="campaign-navigation">
