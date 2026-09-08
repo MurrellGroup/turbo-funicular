@@ -175,7 +175,7 @@ function setInputBusy(busy) {
   ui["pdb-id-input"].disabled = busy;
 }
 
-function selectionPreview() {
+function selectionPreview(preserveCamera = true) {
   clearCampaign();
   const generation = ++previewGeneration;
   modelReady = false;
@@ -187,7 +187,7 @@ function selectionPreview() {
   ui['run-campaign'].disabled = true;
   const subset = selectedStructure(pdbStructure, choices, keptChains, keptLigands);
   const preview = previewStructure(subset, previewGraphs);
-  if (preview.atoms) viewer.setSample(preview, new Float32Array(preview.target_coords.flat()));
+  if (preview.atoms) viewer.setSample(preview, new Float32Array(preview.target_coords.flat()), preserveCamera);
   else viewer.clear();
   ui['atom-count'].textContent = preview.atoms.toLocaleString();
   ui['selection-count'].textContent = `${preview.atoms.toLocaleString()} selected / ${model.maximumAtoms.toLocaleString()} inference limit`;
@@ -197,7 +197,7 @@ function selectionPreview() {
   activeHighlight();
   if (replacements.size) preparedPdbSelection(subset, keptLigands.size ? '__all__' : null).then(prepared => {
     if (generation !== previewGeneration || modelReady || inputBusy) return;
-    viewer.setSample(prepared, new Float32Array(prepared.target_coords.flat()));
+    viewer.setSample(prepared, new Float32Array(prepared.target_coords.flat()), true);
     ui['selection-count'].textContent = `${prepared.atoms.toLocaleString()} selected / ${model.maximumAtoms.toLocaleString()} inference limit`;
     activeHighlight();
   }).catch(error => { if (generation === previewGeneration) setStatus(error.message); });
@@ -246,7 +246,7 @@ async function useSelection() {
   try {
     const subset = selectedStructure(pdbStructure, choices, keptChains, keptLigands);
     const prepared = await preparedPdbSelection(subset, keptLigands.size ? '__all__' : null);
-    await applySample(prepared, 'Ready');
+    await applySample(prepared, 'Ready', true);
     customSample = prepared;
     preparedBase = prepared;
     editor.setSample(prepared);
@@ -290,7 +290,7 @@ async function preparePdb(text, filename = "structure.pdb", depositedText = null
     setSourceMode("custom");
     setStatus('Structure loaded');
     const original = pdbStructure;
-    const preview = selectionPreview();
+    const preview = selectionPreview(false);
     loadCcdGraphs(original.ligandOptions.map(o => o.atoms[0].rawResidue), rdkit).then(graphs => {
       if (pdbStructure !== original) return;
       previewGraphs = graphs;
@@ -341,7 +341,7 @@ async function applySmiles(smiles = ui["smiles-input"].value) {
       replacements.set(group.id, graph);
       choiceControls(); selectionPreview();
       const prepared = await preparedPdbSelection(selectedStructure(pdbStructure, choices, keptChains, keptLigands), '__all__');
-      viewer.setSample(prepared, new Float32Array(prepared.target_coords.flat()));
+      viewer.setSample(prepared, new Float32Array(prepared.target_coords.flat()), true);
       ui['selection-count'].textContent = `${prepared.atoms.toLocaleString()} selected / ${model.maximumAtoms.toLocaleString()} inference limit`;
       activeHighlight();
       return prepared;

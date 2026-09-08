@@ -15,7 +15,25 @@ try {
   await page.waitForFunction(() => window.__wsfmdock, null, { timeout: 30000 });
   await page.evaluate(() => window.__wsfmdock.ready);
   await page.evaluate(text => window.__wsfmdock.loadPdbText(text, 'chains.pdb'), pdb);
+  const cameraState = () => page.evaluate(() => {
+    const v = window.__wsfmdock.viewer;
+    return { position: v.camera.position.toArray(), quaternion: v.camera.quaternion.toArray(),
+      target: v.controls.target.toArray(), zoom: v.camera.zoom };
+  });
+  await page.evaluate(() => {
+    const v = window.__wsfmdock.viewer;
+    v.controls.enableDamping = false;
+    v.camera.position.set(21, -17, 31); v.controls.target.set(2, 3, 1); v.controls.update();
+  });
+  const camera = await cameraState();
+  await page.locator('#chain-list input').first().uncheck();
+  assert.deepEqual(await cameraState(), camera);
+  await page.locator('#chain-list input').first().check();
+  assert.deepEqual(await cameraState(), camera);
+  await page.click('#chains-none'); assert.deepEqual(await cameraState(), camera);
+  await page.click('#chains-all'); assert.deepEqual(await cameraState(), camera);
   await page.evaluate(() => window.__wsfmdock.useSelection());
+  assert.deepEqual(await cameraState(), camera);
   await page.click('#edit-sequence');
   await page.fill('#sequence-input', 'AKNAC');
   await page.click('#align-sequence');
@@ -87,6 +105,6 @@ try {
   });
   assert.ok(pixels > 100); assert.deepEqual(errors, []);
   console.log(JSON.stringify({ colors, highlight: highlight.color, radius: highlight.radius, pixels,
-    chainSwitch: true, authorNumberMapping: true, selectionsPreserved: true, swapAll: true, actualPicking: true }));
+    chainSwitch: true, authorNumberMapping: true, selectionsPreserved: true, swapAll: true, actualPicking: true, cameraPreserved: true }));
 } catch (e) { throw e; }
 finally { await browser.close(); }
