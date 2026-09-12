@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { parsePdb, preparePdbSample, ATOM_NAMES } from '../src/prep.js';
 import { AMINO_ACIDS, AA_NAMES, parseSequences, proteinChains, mutateSample, resolveEdits } from '../src/sequence.js';
 import { alignChain } from '../src/alignment.js';
 import { validateSample } from '../src/sample.js';
+import { withBackboneGraph } from '../src/backbone.js';
 import proteinGraph from '../src/protein_graph.json' with { type: 'json' };
 import { miniPdb } from './fixtures.mjs';
 
@@ -50,6 +52,37 @@ test('Random identities are per seed, reproducible, canonical, and do not mutate
   assert.deepEqual(resolveEdits(base, edits, 42), resolveEdits(base, edits, 42));
   assert.equal(edits.get(residue.id), 'X');
   assert.throws(() => resolveEdits(base, new Map([[500, 'W']]), 1), /removed residue/);
+});
+
+test('Peptide bonds survive amino-acid edits without blocking them', () => {
+  const s = structuredClone(base);
+  s.target_coords[5] = s.target_coords[2].map((v, k) => v + (k === 0 ? 1.33 : 0));
+  delete s.backbone_graph_complete;
+  const linked = withBackboneGraph(s);
+  assert.ok(linked.neighbors.slice(20, 30).some(([j, t]) => j === 5 && t === 0));
+  for (const aa of AMINO_ACIDS) {
+    const result = mutateSample(linked, new Map([[residue.id, aa]]), 23).sample;
+    validateSample(result);
+    const n = result.atom_labels.indexOf(linked.atom_labels[5]);
+    const changedC = proteinChains(result)[0].residues[0].atoms.find(i => result.atom_names[i] === 2);
+    assert.ok(result.neighbors.slice(changedC * 10, changedC * 10 + 10).some(([j, t]) => j === n && t === 0));
+    assert.deepEqual(result.target_coords[changedC], linked.target_coords[2]);
+    assert.deepEqual(result.target_coords[n], linked.target_coords[5]);
+  }
+});
+
+test('Packaged examples can run campaigns without optional PDB chain labels', () => {
+  const root = new URL('../public/assets/samples/', import.meta.url);
+  const catalog = JSON.parse(readFileSync(new URL('catalog.json', root)));
+  for (const entry of catalog.samples) {
+    const sample = JSON.parse(readFileSync(new URL(entry.file, root)));
+    const result = mutateSample(sample, new Map(), 1);
+    assert.equal(result.sample, sample);
+    assert.equal(result.resolved.size, 0);
+    const chains = proteinChains(sample);
+    const entities = new Set(sample.entity_ids.filter((_, i) => [1, 2].includes(sample.roles[i])));
+    assert.equal(chains.length, entities.size);
+  }
 });
 
 test('An attachment is protected; unrelated mutation remaps it with exact type and ligand labels', () => {

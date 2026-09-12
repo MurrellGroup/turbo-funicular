@@ -77,8 +77,12 @@ try {
   await page.screenshot({ path: 'test-results-glycan-mobile.png' });
   const mobilePixels = await pixels();
   assert.ok(mobilePixels > 100);
+  await page.click('#example-tab');
+  await page.waitForFunction(() => document.getElementById('step-status').textContent === 'Ready');
+  await page.selectOption('#sample-select', 'glycan-free-100.json');
+  await page.waitForFunction(() => window.__wsfmdock.sample.atoms === 19
+    && document.getElementById('step-status').textContent === 'Ready');
   await page.evaluate(async () => {
-    await window.__wsfmdock.loadSample('glycan-free-100.json');
     await window.__wsfmdock.runInference();
   });
   const free = await page.evaluate(async () => ({
@@ -86,11 +90,14 @@ try {
     atoms: window.__wsfmdock.sample.atoms,
     finite: [...await window.__wsfmdock.model.coordinates()].every(Number.isFinite),
   }));
+  assert.equal(free.atoms, 19);
   assert.equal(free.rendered, free.atoms);
   assert.ok(free.finite);
+  await page.selectOption('#sample-select', 'glycan-attached-5-perturbed.json');
+  await page.waitForFunction(() => window.__wsfmdock.sample.atoms === 2392
+    && document.getElementById('step-status').textContent === 'Ready');
   const perturbed = await page.evaluate(async () => {
     const api = window.__wsfmdock;
-    await api.loadSample('glycan-attached-5-perturbed.json');
     const original = [...await api.model.coordinates()];
     document.getElementById('step-select').value = '8';
     await api.runInference();
@@ -112,8 +119,11 @@ try {
       }
       if (!api.viewer.referenceAtoms.includes(a)) throw new Error('Missing backbone reference ghost.');
     }
-    return { moving, maximum, finite: [...coords].every(Number.isFinite) };
+    return { moving, maximum, finite: [...coords].every(Number.isFinite),
+      status: document.getElementById('status').textContent };
   });
+  console.log('Perturbed inference', JSON.stringify(perturbed));
+  assert.match(perturbed.status, /Inference complete/);
   assert.ok(perturbed.moving > 0 && perturbed.maximum > 0.1 && perturbed.finite);
   await page.screenshot({ path: 'test-results-backbone-mobile.png' });
   assert.deepEqual(errors, []);

@@ -31,7 +31,7 @@ export function proteinChains(sample) {
     const id = sample.residue_ids[atom];
     if (!residues.has(id)) {
       const label = sample.atom_labels?.[atom]?.split('|');
-      const chain = label?.length === 5 ? label[2] : String(sample.chain_ids[atom]);
+      const chain = label?.length === 5 ? label[2] : String(sample.chain_ids?.[atom] ?? sample.entity_ids[atom]);
       const number = label?.length === 5 ? `${label[3]}${label[4]}` : String(id + 1);
       const name = RESIDUES[sample.residue_types[atom]];
       const residue = { id, chain, number, name, aa: ONE_LETTER[name] ?? 'X', atoms: [] };
@@ -57,7 +57,8 @@ export function validateEdit(sample, residue, aa) {
   if (aa !== 'X' && !AMINO_ACIDS.includes(aa)) throw new Error('Unknown amino-acid identity.');
   if (aa === residue.aa) return;
   if (!residue.atoms.some(i => sample.atom_names[i] === 1)) throw new Error(`Residue ${residue.chain}:${residue.number} has no CA anchor.`);
-  if (externalEdges(sample, residue).length) {
+  // Mutations retain backbone atoms, so peptide bonds do not protect AA identity.
+  if (externalEdges(sample, residue).some(([a, b]) => sample.roles[a] !== 1 || sample.roles[b] !== 1)) {
     throw new Error(`Residue ${residue.chain}:${residue.number} has an external covalent attachment; its identity is protected.`);
   }
 }
