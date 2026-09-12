@@ -22,7 +22,7 @@ try {
   });
   // Exercise remote weights even when validating the local development page.
   await page.route('**/assets/model/manifest.json', async route => {
-    const root = 'https://huggingface.co/murrellb/WSFMDocking/resolve/5886cc4cf17575a57f54a6e25d3b7c2458a99d3c/webgpu/ck_240000/';
+    const root = 'https://huggingface.co/murrellb/WSFMDocking/resolve/0930c08c8b441bc99077b436fdd3c390c365827c/webgpu/v8_ck_240000/';
     const response = await fetch(root + 'manifest.json');
     const manifest = await response.json();
     manifest.weight_file = root + manifest.weight_file;
@@ -34,7 +34,7 @@ try {
   console.log('Model loaded');
   assert.equal(await page.evaluate(() => window.__wsfmdock.model.weights.manifest.iteration), 240000);
   assert.equal(await page.evaluate(() => window.__wsfmdock.model.weights.manifest.checkpoint_sha256),
-    'd492168d57bdfcf2d456fb7d88286aa8153791336058b7de6a519481095a6afe');
+    '425083dee00c40a570dbf5495aeeeb1503b6d3f4c32516c1e1edcdce203e77ac');
   const prepared = await page.evaluate(async () => {
     await window.__wsfmdock.fetchPdb('4BYH');
     const ids = [...document.querySelectorAll('#ligand-list input')].slice(1).map(i => i.value);
@@ -88,8 +88,41 @@ try {
   }));
   assert.equal(free.rendered, free.atoms);
   assert.ok(free.finite);
+  const perturbed = await page.evaluate(async () => {
+    const api = window.__wsfmdock;
+    await api.loadSample('glycan-attached-5-perturbed.json');
+    const original = [...await api.model.coordinates()];
+    document.getElementById('step-select').value = '8';
+    await api.runInference();
+    const coords = await api.model.coordinates();
+    let moving = 0, maximum = 0;
+    for (let a = 0; a < api.sample.atoms; a += 1) {
+      if (!api.sample.coordinate_design[a]) for (let k = 0; k < 3; k += 1) {
+        if (coords[3*a+k] !== original[3*a+k]) throw new Error('Fixed atom moved.');
+      }
+      if (api.sample.roles[a] !== 1 || !api.sample.coordinate_design[a]) continue;
+      moving += 1;
+      const item = api.viewer.backboneMeshes.find(v => v.atoms.includes(a));
+      const index = item.atoms.indexOf(a);
+      for (let k = 0; k < 3; k += 1) {
+        maximum = Math.max(maximum, Math.abs(coords[a*3+k] - original[a*3+k]));
+        if (Math.abs(item.mesh.instanceMatrix.array[index*16+12+k] - coords[a*3+k]) > 1e-4) {
+          throw new Error('Displayed backbone differs from model output.');
+        }
+      }
+      if (!api.viewer.referenceAtoms.includes(a)) throw new Error('Missing backbone reference ghost.');
+    }
+    return { moving, maximum, finite: [...coords].every(Number.isFinite) };
+  });
+  assert.ok(perturbed.moving > 0 && perturbed.maximum > 0.1 && perturbed.finite);
+  await page.screenshot({ path: 'test-results-backbone-mobile.png' });
   assert.deepEqual(errors, []);
   assert.ok(downloads.some(([status, address]) => [200, 302].includes(status) && address.includes('weights.f32')));
   assert.ok(downloads.some(([status]) => status === 200));
-  console.log(JSON.stringify({ prepared, desktopPixels, mobilePixels, free, downloads }, null, 2));
+  const report = { prepared, desktopPixels, mobilePixels, free, perturbed, downloads };
+  console.log(JSON.stringify(report, null, 2));
+  if (process.env.RELEASE_REPORT) {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(process.env.RELEASE_REPORT, JSON.stringify(report, null, 2));
+  }
 } finally { clearTimeout(deadline); await browser.close(); }

@@ -121,7 +121,7 @@ async function applySample(nextSample, readyStatus = "Ready", preserveCamera = f
   const validation = await device.popErrorScope();
   const memory = await device.popErrorScope();
   if (allocationError || validation || memory) throw allocationError ?? new Error((validation ?? memory).message);
-  sample = nextSample;
+  sample = model.sampleBuffers.sample;
   modelReady = true;
   const initial = model.initialize(Number(ui["seed-input"].value) || 1);
   viewer.setSample(sample, initial.coords, preserveCamera);

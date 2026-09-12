@@ -19,6 +19,18 @@ export function validateSample(sample, maximumAtoms = Number.POSITIVE_INFINITY) 
   for (const name of ['base_scales', 'initial_scales']) {
     if (sample[name].some(v => !Number.isFinite(v) || v < 0)) throw new Error(`Invalid ${name}.`);
   }
+  if (sample.backbone_sigma !== undefined && (sample.backbone_sigma.length !== n
+    || sample.backbone_sigma.some(v => !Number.isFinite(v) || v < 0))) {
+    throw new Error('Invalid per-atom backbone sigma.');
+  }
+  for (let i = 0; i < n; i += 1) {
+    if (sample.roles[i] === 1 && (sample.base_scales[i] !== 0 || sample.initial_scales[i] !== 0)) {
+      throw new Error('Backbone atoms require zero additional noise scales.');
+    }
+    if (sample.roles[i] === 1 && sample.coordinate_design[i] && !(sample.backbone_sigma?.[i] > 0)) {
+      throw new Error('Movable backbone requires its conditioning sigma.');
+    }
+  }
   if (sample.neighbors?.length !== n * 10 || sample.neighbors.some((edge) => edge.length !== 2)) {
     throw new Error("neighbors must contain exactly ten sparse pair slots per atom.");
   }

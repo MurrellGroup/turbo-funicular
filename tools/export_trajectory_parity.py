@@ -43,17 +43,15 @@ def main() -> None:
         raise ValueError("steps must be positive")
     sys.path.insert(0, str(args.ckdock))
     import wsfmdock.model as model_module
-    from wsfmdock.model import EndpointDockingCKModel, ModelConfig, make_bond_pair_features
+    from wsfmdock.model import make_bond_pair_features
+    from wsfmdock.checkpoints import load_ck_checkpoint
 
     model_module.flex_attention = dense_flex_attention
     sample = json.loads(args.sample.read_text())
     n = int(sample["atoms"])
     device = torch.device("cuda")
-    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    model = EndpointDockingCKModel(ModelConfig(**checkpoint["model_config"]),
-                                  lateral_width=checkpoint["lateral_width"]).to(device)
-    model.load_state_dict(checkpoint["ema"], strict=True)
-    model.eval().requires_grad_(False)
+    torch.set_num_threads(2)
+    model, checkpoint = load_ck_checkpoint(args.checkpoint, device=device)
 
     rng = np.random.default_rng(args.seed)
     target = np.asarray(sample["target_coords"], dtype=np.float32)
@@ -118,6 +116,7 @@ def main() -> None:
                 tensor(increment),
                 tensor(latent),
                 *static,
+                noise_sigma=tensor(sample.get("backbone_sigma", np.zeros(n)), torch.float32),
             )
             coords = result.coords[0].cpu().numpy()
             transitions.append(

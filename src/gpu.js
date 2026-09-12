@@ -180,6 +180,19 @@ fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id) l
   }
 }`;
 
+const CONDITION_ADD = /* wgsl */ `
+enable f16;
+struct Params { dims: vec4<u32> };
+@group(0) @binding(0) var<storage, read> time: array<f16>;
+@group(0) @binding(1) var<storage, read> sigma: array<f16>;
+@group(0) @binding(2) var<storage, read_write> output: array<f16>;
+@group(0) @binding(3) var<uniform> params: Params;
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) global: vec3<u32>) {
+  let index = global.x;
+  if (index < arrayLength(&output)) { output[index] = time[index % params.dims.x] + sigma[index]; }
+}`;
+
 const ADALN = /* wgsl */ `
 enable f16;
 struct Params { dims: vec4<u32> };
@@ -188,6 +201,7 @@ struct Params { dims: vec4<u32> };
 @group(0) @binding(2) var<storage, read> norm: array<f16>;
 @group(0) @binding(3) var<storage, read_write> output: array<f16>;
 @group(0) @binding(4) var<uniform> params: Params;
+@group(0) @binding(5) var<storage, read> condition_rows: array<u32>;
 var<workgroup> sums: array<f32, 256>;
 var<workgroup> squares: array<f32, 256>;
 
@@ -218,8 +232,9 @@ fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index
   for (var column = lane; column < width; column += 256u) {
     let centered = (f32(input[row * width + column]) - mean) * inverse;
     let normalized = centered * f32(norm[column]) + f32(norm[width + column]);
-    let scale = f32(affine[column]);
-    let shift = f32(affine[width + column]);
+    let offset = select(0u, condition_rows[row] * 2u * width, params.dims.z != 0u);
+    let scale = f32(affine[offset + column]);
+    let shift = f32(affine[offset + width + column]);
     output[row * width + column] = f16(normalized * (1.0 + scale) + shift);
   }
 }`;
@@ -666,13 +681,16 @@ struct Scalars { values: vec4<f32> };
 @group(0) @binding(3) var<storage, read> design: array<u32>;
 @group(0) @binding(4) var<storage, read_write> endpoint: array<f32>;
 @group(0) @binding(5) var<uniform> scalars: Scalars;
+@group(0) @binding(6) var<storage, read> rates: array<f32>;
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global: vec3<u32>) {
   let index = global.x;
   if (index >= arrayLength(&correction)) { return; }
   let atom = index / 3u;
   if (design[atom] != 0u) { correction[index] += f32(delta[index]); }
-  endpoint[index] = base[index] + scalars.values.x * correction[index];
+  let time = scalars.values.x;
+  let gate = (1.0 - time) / (1.0 + rates[atom] * time);
+  endpoint[index] = base[index] + gate * correction[index];
 }`;
 
 const RESIDUAL_UPDATE = /* wgsl */ `
@@ -720,6 +738,7 @@ struct Scalars { values: vec4<f32> };
 @group(0) @binding(3) var<storage, read> scales: array<f32>;
 @group(0) @binding(4) var<storage, read_write> output: array<f32>;
 @group(0) @binding(5) var<uniform> scalars: Scalars;
+@group(0) @binding(6) var<storage, read> rates: array<f32>;
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global: vec3<u32>) {
   let index = global.x;
@@ -730,7 +749,7 @@ fn main(@builtin(global_invocation_id) global: vec3<u32>) {
   let delta = end - start;
   let remaining = 1.0 - start;
   let tau = select(0.0, delta / remaining, remaining > 0.0);
-  let alpha = (1.0 + start) * tau - start * tau * tau;
+  let alpha = (1.0 + rates[atom] * start) * tau - rates[atom] * start * tau * tau;
   let q = scales[atom] * scales[atom] * delta * (2.0 - start - end);
   let gamma = delta * sqrt(max(q, 0.0)) + delta * delta;
   let increment_scale = select(0.0, tau / alpha, alpha != 0.0);
@@ -747,6 +766,7 @@ struct Scalars { values: vec4<f32> };
 @group(0) @binding(4) var<storage, read> design: array<u32>;
 @group(0) @binding(5) var<storage, read_write> output: array<f32>;
 @group(0) @binding(6) var<uniform> scalars: Scalars;
+@group(0) @binding(7) var<storage, read> rates: array<f32>;
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global: vec3<u32>) {
   let index = global.x;
@@ -756,8 +776,9 @@ fn main(@builtin(global_invocation_id) global: vec3<u32>) {
   let end = scalars.values.y;
   let remaining = 1.0 - start;
   let tau = select(0.0, (end - start) / remaining, remaining > 0.0);
-  let alpha = (1.0 + start) * tau - start * tau * tau;
-  let beta = -remaining * tau * (1.0 - tau);
+  let rate = rates[index / 3u];
+  let alpha = (1.0 + rate * start) * tau - rate * start * tau * tau;
+  let beta = -rate * remaining * tau * (1.0 - tau);
   output[index] = coords[index]
     + alpha * (secant[index] - coords[index])
     + beta * (coords[index] - base_mean[index])
@@ -802,6 +823,7 @@ export class Kernels {
       matmul: MATMUL,
       matmulRegister: MATMUL_REGISTER,
       adaln: ADALN,
+      conditionAdd: CONDITION_ADD,
       embedding: EMBEDDING,
       prepareQkv: PREPARE_QKV,
       attention: FLASH_ATTENTION,

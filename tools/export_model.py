@@ -110,7 +110,7 @@ def main() -> None:
     args = arguments()
     checkpoint_bytes = args.checkpoint.read_bytes()
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    expected = "continuous_docking_pairgraph_alldepth_secant_x1_ck_v7"
+    expected = "continuous_docking_backbone_segments_alldepth_secant_x1_ck_v8"
     if checkpoint.get("method") != expected or checkpoint.get("stage") != "ck":
         raise ValueError("unsupported checkpoint method or stage")
     state = checkpoint["ema"]
@@ -141,6 +141,7 @@ def main() -> None:
     )
     writer.add("local.time_features", state["local.time_features.weight"])
     writer.add("local.time_embedding", state["local.time_embedding.weight"])
+    writer.add("local.sigma_embedding", state["local.sigma_embedding.weight"])
     for index in range(int(config["depth"])):
         export_block(writer, state, f"local.blocks.{index}", f"local.blocks.{index}", int(config["heads"]))
     for index in range(int(config["endpoint_update_layers"])):
@@ -164,7 +165,7 @@ def main() -> None:
     weights_path = args.output / f"weights.{suffix}"
     weights_path.write_bytes(writer.payload)
     manifest = {
-        "format": "wsfmdock_webgpu_v7",
+        "format": "wsfmdock_webgpu_v8",
         "method": checkpoint["method"],
         "stage": checkpoint["stage"],
         "iteration": int(checkpoint["iteration"]),
@@ -183,6 +184,7 @@ def main() -> None:
         "sampling": {"initial_molecule_scale": 10.0, "process_molecule_scale": 1.0,
                      "sidechain_scale": 0.5},
         "time_frequencies": state["local.time_features.weight"].tolist(),
+        "sigma_frequencies": state["local.sigma_features.weight"].tolist(),
         "tensors": writer.entries,
     }
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

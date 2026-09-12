@@ -1,5 +1,6 @@
 import { connectedComponents, orderObservedGraph } from "./chemistry.js";
 import proteinGraph from './protein_graph.json' with { type: 'json' };
+import { withBackboneGraph } from './backbone.js';
 
 export const ROLE_MOLECULE = 0;
 export const ROLE_BACKBONE = 1;
@@ -246,7 +247,7 @@ function assembleSample({
   }
   const coordinateDesign = roles.map((role) => role === ROLE_BACKBONE ? 0 : 1);
   const baseScales = roles.map((role) => role === ROLE_MOLECULE || role === ROLE_LIGAND ? 1 : role === ROLE_SIDECHAIN ? 0.5 : 0);
-  return {
+  return withBackboneGraph({
     format: "wsfmdock_webgpu_sample_v1",
     id,
     label,
@@ -269,7 +270,7 @@ function assembleSample({
     ...(topology ?? displayTopology(
       coords, atomicNumbers, roles, residueIds, chainIds, atomNames, bonds,
     )),
-  };
+  });
 }
 
 export class GraphUnavailableError extends Error {

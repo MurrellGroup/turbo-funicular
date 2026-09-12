@@ -29,6 +29,12 @@
       "label": "glycan-free 100",
       "atoms": 19,
       "file": "glycan-free-100.json"
+    },
+    {
+      "id": "glycan-attached-5-perturbed",
+      "label": "glycan-attached 5 / backbone",
+      "atoms": 2392,
+      "file": "glycan-attached-5-perturbed.json"
     }
   ]
 }

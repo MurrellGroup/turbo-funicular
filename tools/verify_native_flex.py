@@ -25,7 +25,8 @@ def arguments() -> argparse.Namespace:
 def main() -> None:
     args = arguments()
     sys.path.insert(0, str(args.ckdock))
-    from wsfmdock.model import EndpointDockingCKModel, ModelConfig, make_bond_pair_features
+    from wsfmdock.model import make_bond_pair_features
+    from wsfmdock.checkpoints import load_ck_checkpoint
     from wsfmdock.schema import AtomRole
     import wsfmdock.model as model_module
     model_module.flex_attention = torch.compile(model_module.flex_attention, fullgraph=True)
@@ -35,10 +36,8 @@ def main() -> None:
     n = int(sample["atoms"])
     length = math.ceil(n / 128) * 128
     device = torch.device("cuda")
-    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    model = EndpointDockingCKModel(ModelConfig(**checkpoint["model_config"])).to(device)
-    model.load_state_dict(checkpoint["ema"], strict=True)
-    model.eval().requires_grad_(False)
+    torch.set_num_threads(2)
+    model, checkpoint = load_ck_checkpoint(args.checkpoint, device=device)
 
     def padded(values, width=None, dtype=np.float32, fill=0):
         shape = (length,) if width is None else (length, width)
@@ -100,6 +99,7 @@ def main() -> None:
             scales,
             valid,
             block_mask,
+            noise_sigma=padded(sample.get("backbone_sigma", np.zeros(n))),
         )
     expected_coords = torch.tensor(fixture["expected_coords"]).view(n, 3)
     expected_secant = torch.tensor(fixture["expected_secant"]).view(n, 3)

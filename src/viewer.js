@@ -214,7 +214,8 @@ export class MolecularViewer {
     this.referenceGroup.visible = this.referenceVisible;
     const reference = sample.reference_sample ?? sample;
     this.referenceAtoms = reference.roles.flatMap(
-      (role, atom) => role === ROLE_SIDECHAIN || role === ROLE_LIGAND || role === 0 ? [atom] : [],
+      (role, atom) => role === ROLE_SIDECHAIN || role === ROLE_LIGAND || role === 0
+        || (role === ROLE_BACKBONE && reference.coordinate_design?.[atom]) ? [atom] : [],
     );
     this.referenceAtomMesh = new THREE.InstancedMesh(
       sphere,
@@ -222,6 +223,8 @@ export class MolecularViewer {
       this.referenceAtoms.length,
     );
     this.referencePairs = [...reference.sidechain_bonds, ...reference.ligand_bonds, ...reference.molecule_bonds];
+    this.referencePairs.push(...fullBackbonePairs(reference).filter(([a, b]) =>
+      reference.coordinate_design?.[a] || reference.coordinate_design?.[b]));
     this.referenceBondMesh = new THREE.InstancedMesh(
       cylinder,
       material(0xdca85e, 0.16),

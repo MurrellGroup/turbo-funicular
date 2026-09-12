@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import sys
 from pathlib import Path
@@ -31,6 +32,8 @@ def main() -> None:
     from wsfmdock.data import PlinderSource, GlycanSource, GlycanCatalog
     from wsfmdock.schema import AtomRole
     from wsfmdock.protein_graph import add_protein_intraresidue_bonds
+    from wsfmdock.backbone import peptide_edges, residue_groups
+    from wsfmdock.sample_io import pack_repeated
     from export_instantaneous import display_topology, residue_ids
 
     source = (GlycanSource(GlycanCatalog(tuple(args.glycan_store)), args.glycan_kind)
@@ -41,6 +44,19 @@ def main() -> None:
     for record_index in args.records:
         record = add_protein_intraresidue_bonds(source.catalog.load(source.kind, record_index)
                                                if args.glycan_store else source.load(record_index))
+        batch = pack_repeated(record, 1, source_index={'plinder': 2, 'glycan-free': 3, 'glycan-attached': 4}[source_name])
+        edges = peptide_edges(batch, residue_groups(batch))
+        sources, targets, types = (list(getattr(record, name)) for name in
+                                  ('bond_sources', 'bond_targets', 'bond_types'))
+        existing = set(zip(sources, targets))
+        for c, n, _, _ in edges:
+            for a, b in ((c, n), (n, c)):
+                if (a, b) not in existing:
+                    sources.append(a); targets.append(b); types.append(0)
+                    existing.add((a, b))
+        record = replace(record, bond_sources=np.asarray(sources, dtype=np.int32),
+                         bond_targets=np.asarray(targets, dtype=np.int32),
+                         bond_types=np.asarray(types, dtype=np.uint8))
         atoms = len(record.coords)
         degree = np.zeros(atoms, dtype=np.int32)
         neighbors = np.full((atoms, 10, 2), -1, dtype=np.int32)
@@ -77,6 +93,8 @@ def main() -> None:
             "atom_names": record.atom_names.astype(int).tolist(),
             "entity_ids": record.entity_ids.astype(int).tolist(),
             "coordinate_design": design.astype(int).tolist(),
+            "backbone_sigma": [0.0] * atoms,
+            "backbone_graph_complete": True,
             "neighbors": neighbors.reshape(-1, 2).astype(int).tolist(),
             "residue_ids": residues.astype(int).tolist(),
             **display_topology(record, residues),

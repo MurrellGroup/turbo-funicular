@@ -1,12 +1,12 @@
 import { chromium } from "playwright";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 
 const fixture = JSON.parse(await readFile(
-  new URL(`../public/assets/parity/${process.env.PARITY_PREFIX ?? ''}transition.json`, import.meta.url),
+  new URL(`../public/assets/parity/${process.env.PARITY_PREFIX ?? 'v8_fixed_'}transition.json`, import.meta.url),
   "utf8",
 ));
 const trajectory = JSON.parse(await readFile(
-  new URL(`../public/assets/parity/${process.env.PARITY_PREFIX ?? ''}trajectory.json`, import.meta.url),
+  new URL(`../public/assets/parity/${process.env.PARITY_PREFIX ?? 'v8_fixed_'}trajectory.json`, import.meta.url),
   "utf8",
 ));
 
@@ -26,6 +26,13 @@ const browser = await chromium.launch({
 
 try {
   const page = await browser.newPage({ ignoreHTTPSErrors: true });
+  if (process.env.LOCAL_MODEL) {
+    await page.route('https://huggingface.co/**/manifest.json', async route => {
+      const manifest = JSON.parse(await readFile(new URL('../public/assets/model/manifest.json', import.meta.url)));
+      manifest.weight_file = new URL('/assets/model/weights.f32', url).href;
+      await route.fulfill({ json: manifest });
+    });
+  }
   if (process.env.COMPACT_GPU) await page.addInitScript(() => {
     const request = GPUAdapter.prototype.requestDevice;
     GPUAdapter.prototype.requestDevice = function (options) {
@@ -118,6 +125,8 @@ try {
     throw new Error(`Trajectory RMS parity failed: ${trajectoryRms}`);
   }
   console.log(JSON.stringify(result, null, 2));
+  if (process.env.PARITY_REPORT) await writeFile(process.env.PARITY_REPORT,
+    JSON.stringify({ checkpoint_sha256: fixture.checkpoint_sha256, sample: fixture.sample_file, ...result }, null, 2));
 } finally {
   await browser.close();
 }

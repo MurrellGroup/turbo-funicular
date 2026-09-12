@@ -7,6 +7,7 @@ import {
   uploadBuffer,
 } from "./gpu.js";
 import { validateSample } from "./sample.js";
+import { withBackboneGraph } from "./backbone.js";
 
 const STORAGE = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
 const groups = (items, width = 256) => [Math.ceil(items / width)];
@@ -55,6 +56,11 @@ class SampleBuffers {
     this.baseMeans = uploadBuffer(device, flatten(sample.base_means), STORAGE, "sample.base_means");
     this.baseScales = uploadBuffer(device, new Float32Array(sample.base_scales), STORAGE, "sample.base_scales");
     this.design = uploadBuffer(device, new Uint32Array(sample.coordinate_design), STORAGE, "sample.design");
+    this.rates = uploadBuffer(device, new Float32Array(sample.roles.map(role => role === 1 ? 0 : 1)), STORAGE, "sample.rates");
+    const sigmas = sample.backbone_sigma ?? new Array(this.atoms).fill(0);
+    this.sigmaValues = [...new Set([0, ...sigmas])];
+    const sigmaRows = new Map(this.sigmaValues.map((value, index) => [value, index]));
+    this.conditionRows = uploadBuffer(device, new Uint32Array(sigmas.map(value => sigmaRows.get(value))), STORAGE, "sample.condition_rows");
   }
 
   destroy() {
@@ -67,7 +73,7 @@ class SampleBuffers {
 export class DockingWebGpuModel {
   static async create(device, manifestUrl = "/assets/model/manifest.json", suppliedManifest = null) {
     const manifest = suppliedManifest ?? await fetch(manifestUrl).then((response) => response.json());
-    if (manifest.format !== "wsfmdock_webgpu_v7" || manifest.lateral_width !== 1024
+    if (manifest.format !== "wsfmdock_webgpu_v8" || manifest.lateral_width !== 1024
       || manifest.activation_precision !== "float32") throw new Error("Unsupported model export.");
     const [weights, kernels] = await Promise.all([
       WeightStore.load(device, manifestUrl, manifest),
@@ -120,6 +126,8 @@ export class DockingWebGpuModel {
 
   async setSample(sample) {
     validateSample(sample, this.maximumAtoms);
+    sample = withBackboneGraph(sample);
+    validateSample(sample, this.maximumAtoms);
     this.kernels.bindGroups.clear();
     if (this.sampleBuffers) this.sampleBuffers.destroy();
     if (this.buffers) {
@@ -133,6 +141,7 @@ export class DockingWebGpuModel {
     const d = this.config.dim;
     const h = this.config.heads;
     const hidden = this.config.ff_hidden_dim;
+    const conditions = this.sampleBuffers.sigmaValues.length;
     this.buffers = {
       nodeA: this.f16(n * d, "node_a"),
       nodeB: this.f16(n * d, "node_b"),
@@ -144,10 +153,13 @@ export class DockingWebGpuModel {
       merged: this.f16(n * h * 74, "merged_attention"),
       ffProjection: this.f16(n * hidden * 2, "ff_projection"),
       ffHidden: this.f16(n * hidden, "ff_hidden"),
-      affine: this.f16(d * 2, "adaln_affine"),
+      affine: this.f16(conditions * d * 2, "adaln_affine"),
       localFourier: this.f16(d * 2, "local_fourier"),
       finiteFourier: this.f16(d * 6, "finite_fourier"),
-      localCondition: this.f16(d, "local_condition"),
+      localCondition: this.f16(conditions * d, "local_condition"),
+      localTimeCondition: this.f16(d, "local_time_condition"),
+      sigmaFourier: this.f16(conditions * d * 2, "sigma_fourier"),
+      sigmaCondition: this.f16(conditions * d, "sigma_condition"),
       finiteCondition: this.f16(d, "finite_condition"),
       noiseInput: this.f16(n * 6, "noise_input"),
       endpointDelta: this.f16(n * 3, "endpoint_delta"),
@@ -165,6 +177,22 @@ export class DockingWebGpuModel {
     };
     this.currentCoords = this.buffers.coordsA;
     this.nextCoords = this.buffers.coordsB;
+    const frequencies = this.weights.manifest.sigma_frequencies;
+    const fourier = new Float32Array(conditions * d * 2);
+    this.sampleBuffers.sigmaValues.forEach((sigma, row) => {
+      const transformed = Math.fround(Math.log1p(sigma));
+      frequencies.forEach((frequency, column) => {
+        const value = Math.fround(transformed * frequency);
+        fourier[row * 2 * d + column] = Math.fround(Math.fround(Math.cos(value)) - 1);
+        fourier[row * 2 * d + d + column] = Math.sin(value);
+      });
+    });
+    this.device.queue.writeBuffer(this.buffers.sigmaFourier, 0, fourier);
+    const encoder = this.device.createCommandEncoder({ label: "sample conditioning" });
+    const pass = encoder.beginComputePass();
+    this.matmul(pass, this.buffers.sigmaFourier, "local.sigma_embedding", this.buffers.sigmaCondition, conditions, d, d * 2);
+    pass.end();
+    this.device.queue.submit([encoder.finish()]);
   }
 
   makeFourier(value) {
@@ -242,12 +270,13 @@ export class DockingWebGpuModel {
     const { affine, normalized } = this.buffers;
     const n = this.sampleBuffers.atoms;
     const d = this.config.dim;
+    const local = condition === this.buffers.localCondition;
     this.matmul(
       pass,
       condition,
       `${prefix}.affine_weight`,
       affine,
-      1,
+      local ? this.sampleBuffers.sigmaValues.length : 1,
       2 * d,
       d,
       `${prefix}.affine_bias`,
@@ -255,7 +284,8 @@ export class DockingWebGpuModel {
     this.kernels.dispatch(
       pass,
       "adaln",
-      [input, affine, this.weights.get(`${prefix}.norm`), normalized, this.kernels.uniformU32([n, d, 0, 0])],
+      [input, affine, this.weights.get(`${prefix}.norm`), normalized,
+        this.kernels.uniformU32([n, d, local ? 1 : 0, 0]), this.sampleBuffers.conditionRows],
       [n],
     );
     return normalized;
@@ -335,7 +365,9 @@ export class DockingWebGpuModel {
 
     const encoder = this.device.createCommandEncoder({ label: "CK transition" });
     const pass = encoder.beginComputePass({ label: "bounded-memory CK map" });
-    this.matmul(pass, b.localFourier, "local.time_embedding", b.localCondition, 1, d, d * 2);
+    this.matmul(pass, b.localFourier, "local.time_embedding", b.localTimeCondition, 1, d, d * 2);
+    this.kernels.dispatch(pass, "conditionAdd", [b.localTimeCondition, b.sigmaCondition,
+      b.localCondition, this.kernels.uniformU32([d, 0, 0, 0])], groups(this.sampleBuffers.sigmaValues.length * d));
     this.matmul(pass, b.finiteFourier, "finite_time_embedding", b.finiteCondition, 1, d, d * 6);
     this.kernels.dispatch(
       pass,
@@ -366,7 +398,6 @@ export class DockingWebGpuModel {
       ], groups(n * 1024));
       if (this.weights.manifest.endpoint_block_indices.includes(block)) {
         this.matmul(pass, current, `local.endpoint_updates.${endpointIndex}`, b.endpointDelta, n, 3, d);
-        const gate = (1 - start) / (1 + start);
         this.kernels.dispatch(
           pass,
           "endpointUpdate",
@@ -376,7 +407,8 @@ export class DockingWebGpuModel {
             b.correction,
             this.sampleBuffers.design,
             b.endpoints[endpointIndex],
-            this.kernels.uniformF32([gate, 0, 0, 0]),
+            this.kernels.uniformF32([start, 0, 0, 0]),
+            this.sampleBuffers.rates,
           ],
           groups(n * 3),
         );
@@ -402,7 +434,7 @@ export class DockingWebGpuModel {
       this.kernels.dispatch(
         pass,
         "secant",
-        [endpointByBranch[block], b.increment, b.residual, this.sampleBuffers.baseScales, b.secant, scalar],
+        [endpointByBranch[block], b.increment, b.residual, this.sampleBuffers.baseScales, b.secant, scalar, this.sampleBuffers.rates],
         groups(n * 3),
       );
       this.matmul(pass, b.lateralMixed[block], `finite.lateral.outputs.${block}`, b.deltaNode, n, d, 1024);
@@ -423,7 +455,7 @@ export class DockingWebGpuModel {
     this.kernels.dispatch(
       pass,
       "secant",
-      [endpoint, b.increment, b.residual, this.sampleBuffers.baseScales, b.secant, scalar],
+      [endpoint, b.increment, b.residual, this.sampleBuffers.baseScales, b.secant, scalar, this.sampleBuffers.rates],
       groups(n * 3),
     );
     this.kernels.dispatch(
@@ -437,6 +469,7 @@ export class DockingWebGpuModel {
         this.sampleBuffers.design,
         this.nextCoords,
         scalar,
+        this.sampleBuffers.rates,
       ],
       groups(n * 3),
     );
