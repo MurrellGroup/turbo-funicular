@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 const url = process.env.WSFMDock_WEBGPU_URL ?? 'https://127.0.0.1:8791';
+const [attachedSteps, perturbedSteps] = (process.env.TEST_STEPS ?? '4,8').split(',').map(Number);
+assert.ok([attachedSteps, perturbedSteps].every(n => [1, 2, 4, 8, 16].includes(n)));
 const browser = await chromium.launch({ headless: false,
   executablePath: process.env.CHROME_PATH ?? '/home/murrellb/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome',
   args: ['--enable-unsafe-webgpu', '--use-angle=vulkan',
@@ -35,7 +37,13 @@ try {
   assert.equal(await page.evaluate(() => window.__wsfmdock.model.weights.manifest.iteration), 240000);
   assert.equal(await page.evaluate(() => window.__wsfmdock.model.weights.manifest.checkpoint_sha256),
     '425083dee00c40a570dbf5495aeeeb1503b6d3f4c32516c1e1edcdce203e77ac');
-  const prepared = await page.evaluate(async () => {
+  await page.evaluate(() => {
+    const model = window.__wsfmdock.model;
+    const transition = model.transition.bind(model);
+    window.__modelCallCount = 0;
+    model.transition = (...args) => { window.__modelCallCount += 1; return transition(...args); };
+  });
+  const prepared = await page.evaluate(async steps => {
     await window.__wsfmdock.fetchPdb('4BYH');
     const ids = [...document.querySelectorAll('#ligand-list input')].slice(1).map(i => i.value);
     for (const id of ids) {
@@ -44,18 +52,21 @@ try {
     }
     const sample = await window.__wsfmdock.useSelection();
     const attachments = sample.ligand_bonds.filter(([a, b]) => (sample.roles[a] === 3) !== (sample.roles[b] === 3));
-    document.getElementById('step-select').value = '4';
+    document.getElementById('step-select').value = String(steps);
+    const callsBefore = window.__modelCallCount;
     const initial = [...await window.__wsfmdock.model.coordinates()];
     await window.__wsfmdock.runInference();
     const final = [...await window.__wsfmdock.model.coordinates()];
-    return { atoms: sample.atoms, ligandAtoms: sample.roles.filter(r => r === 3).length,
+    return { steps, calls: window.__modelCallCount - callsBefore,
+      atoms: sample.atoms, ligandAtoms: sample.roles.filter(r => r === 3).length,
       attachments, finite: final.every(Number.isFinite),
       moved: Math.max(...final.map((v, i) => Math.abs(v - initial[i]))),
       status: document.getElementById('status').textContent };
-  });
+  }, attachedSteps);
   console.log('Attached inference complete');
   assert.equal(prepared.ligandAtoms, 130);
   assert.equal(prepared.attachments.length, 1);
+  assert.equal(prepared.calls, attachedSteps);
   assert.ok(prepared.finite && prepared.moved > 1);
   assert.match(prepared.status, /Inference complete/);
   await page.check('#show-reference');
@@ -96,10 +107,11 @@ try {
   await page.selectOption('#sample-select', 'glycan-attached-5-perturbed.json');
   await page.waitForFunction(() => window.__wsfmdock.sample.atoms === 2392
     && document.getElementById('step-status').textContent === 'Ready');
-  const perturbed = await page.evaluate(async () => {
+  const perturbed = await page.evaluate(async steps => {
     const api = window.__wsfmdock;
     const original = [...await api.model.coordinates()];
-    document.getElementById('step-select').value = '8';
+    document.getElementById('step-select').value = String(steps);
+    const callsBefore = window.__modelCallCount;
     await api.runInference();
     const coords = await api.model.coordinates();
     let moving = 0, maximum = 0;
@@ -119,11 +131,13 @@ try {
       }
       if (!api.viewer.referenceAtoms.includes(a)) throw new Error('Missing backbone reference ghost.');
     }
-    return { moving, maximum, finite: [...coords].every(Number.isFinite),
+    return { steps, calls: window.__modelCallCount - callsBefore,
+      moving, maximum, finite: [...coords].every(Number.isFinite),
       status: document.getElementById('status').textContent };
-  });
+  }, perturbedSteps);
   console.log('Perturbed inference', JSON.stringify(perturbed));
   assert.match(perturbed.status, /Inference complete/);
+  assert.equal(perturbed.calls, perturbedSteps);
   assert.ok(perturbed.moving > 0 && perturbed.maximum > 0.1 && perturbed.finite);
   await page.screenshot({ path: 'test-results-backbone-mobile.png' });
   assert.deepEqual(errors, []);
