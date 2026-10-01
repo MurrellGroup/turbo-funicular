@@ -1,0 +1,44 @@
+name: Viewer tests
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'index.html'
+      - 'package*.json'
+      - 'vendor/**'
+      - 'tools/prepare_mpnn_runtime.mjs'
+      - '.github/workflows/viewer-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'index.html'
+      - 'package*.json'
+      - 'vendor/**'
+      - 'tools/prepare_mpnn_runtime.mjs'
+      - '.github/workflows/viewer-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  viewer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:viewer
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:viewer-browser
+      - run: npm run test:prep
+      - run: npm run build

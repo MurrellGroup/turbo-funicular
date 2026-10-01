@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { TrackballControls } from "three/addons/controls/TrackballControls.js";
 
 const ROLE_BACKBONE = 1;
 const ROLE_SIDECHAIN = 2;
@@ -18,7 +18,10 @@ const residueKey = (sample, atom) => {
   const label = sample.atom_labels?.[atom]?.split('|');
   return label?.length === 5 ? JSON.stringify(label.slice(2)) : String(sample.residue_ids[atom]);
 };
-const chainKey = (sample, atom) => sample.atom_labels?.[atom]?.split('|')[2] ?? String(sample.chain_ids?.[atom] ?? '');
+const chainKey = (sample, atom) => {
+  const label = sample.atom_labels?.[atom]?.split('|');
+  return label?.length === 5 ? label[2] : String(sample.chain_ids?.[atom] ?? '');
+};
 
 const axis = new THREE.Vector3(0, 1, 0);
 const a = new THREE.Vector3();
@@ -122,13 +125,15 @@ export class MolecularViewer {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.7));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.replaceChildren(this.renderer.domElement);
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.075;
-    this.controls.rotateSpeed = 0.55;
+    this.createControls();
     const raycaster = new THREE.Raycaster();
     let pointerStart;
-    this.renderer.domElement.addEventListener('pointerdown', event => { pointerStart = [event.clientX, event.clientY]; });
+    this.renderer.domElement.addEventListener('pointerdown', event => {
+      pointerStart = [event.clientX, event.clientY];
+      // Preserve modified left-drag panning alongside right-drag and touch pan.
+      this.controls.mouseButtons.LEFT = event.shiftKey || event.ctrlKey || event.metaKey
+        ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+    }, { capture: true });
     this.renderer.domElement.addEventListener('pointerup', event => {
       if (!pointerStart || Math.hypot(event.clientX - pointerStart[0], event.clientY - pointerStart[1]) > 4) return;
       const rect = this.renderer.domElement.getBoundingClientRect();
@@ -158,10 +163,24 @@ export class MolecularViewer {
     this.backbone = null; this.sideBonds = null;
     this.referenceVisible = false;
     this.proteinColorMode = 'role'; this.highlightedResidues = new Set(); this.chainColors = new Map();
+    this.proteinChainIds = new Set();
+    this.ligandColorsByElement = true;
+    this.highlightedLigandAtoms = new Set();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.animateFrame = this.animateFrame.bind(this);
     requestAnimationFrame(this.animateFrame);
+  }
+
+  createControls() {
+    this.controls?.dispose();
+    // Unlike fixed-up orbiting, trackball rotation can pass through both poles.
+    this.controls = new TrackballControls(this.camera, this.renderer.domElement);
+    this.controls.staticMoving = false;
+    this.controls.dynamicDampingFactor = 0.15;
+    this.controls.rotateSpeed = 1;
+    // Do not let typing A/S/D in sequence or SMILES inputs change mouse modes.
+    this.controls.keys = [];
   }
 
   clear() {
@@ -180,9 +199,14 @@ export class MolecularViewer {
   setSample(sample, coords, preserveCamera = false) {
     this.clear();
     this.sample = sample;
+    this.highlightedLigandAtoms.clear();
     this.atomResidueKeys = sample.roles.map((_, i) => residueKey(sample, i));
     this.atomChainKeys = sample.roles.map((_, i) => chainKey(sample, i));
-    const chains = [...new Set(sample.roles.flatMap((role, i) => [1, 2].includes(role) ? [chainKey(sample, i)] : []))].sort();
+    this.proteinChainIds = new Set(sample.roles.flatMap((role, i) =>
+      [ROLE_BACKBONE, ROLE_SIDECHAIN].includes(role) ? [this.atomChainKeys[i]] : []));
+    // Append ligand-only chains without shifting the existing protein palette.
+    const chains = [...this.proteinChainIds].sort();
+    chains.push(...[...new Set(this.atomChainKeys)].filter(id => !this.proteinChainIds.has(id)).sort());
     this.chainColors = new Map(chains.map((id, i) => [id, new THREE.Color(CHAIN_COLORS[i % CHAIN_COLORS.length])]));
     this.group = new THREE.Group();
     this.scene.add(this.group);
@@ -203,12 +227,12 @@ export class MolecularViewer {
     this.sideAtoms = new THREE.InstancedMesh(sphere, material(0xffffff, 0.9), sample.roles.filter((role) => role === ROLE_SIDECHAIN).length);
     this.sideBonds = new THREE.InstancedMesh(cylinder, material(0xffffff, 0.85), sample.sidechain_bonds.length);
     this.moleculePairs = [...sample.ligand_bonds, ...sample.molecule_bonds];
-    this.ligandBonds = new THREE.InstancedMesh(cylinder, material(0xd65358), this.moleculePairs.length);
+    this.ligandBonds = new THREE.InstancedMesh(cylinder, material(0xffffff), this.moleculePairs.length);
     this.ligandByElement = groupedAtoms(sample, ROLE_LIGAND);
     this.ligandMeshes = [...this.ligandByElement].map(([element, atoms]) => ({
       element,
       atoms,
-      mesh: new THREE.InstancedMesh(sphere, material(ELEMENT_COLORS.get(element) ?? 0xcd83d2), atoms.length),
+      mesh: new THREE.InstancedMesh(sphere, material(0xffffff), atoms.length),
     }));
     this.referenceGroup = new THREE.Group();
     this.referenceGroup.visible = this.referenceVisible;
@@ -273,7 +297,39 @@ export class MolecularViewer {
 
   setProteinColorMode(mode) {
     this.proteinColorMode = mode === 'chain' ? 'chain' : 'role';
-    this.updateProteinColors(); this.onSampleChange?.();
+    this.updateProteinColors(); this.updateLigandColors(); this.onSampleChange?.();
+  }
+
+  setLigandColorsByElement(enabled) {
+    this.ligandColorsByElement = Boolean(enabled);
+    this.updateLigandColors(); this.onSampleChange?.();
+  }
+
+  highlightLigandAtoms(atoms) {
+    this.highlightedLigandAtoms = new Set(atoms);
+    this.updateLigandColors();
+  }
+
+  updateLigandColors() {
+    if (!this.sample) return;
+    const byChain = this.proteinColorMode === 'chain' && !this.ligandColorsByElement;
+    const color = new THREE.Color();
+    const tint = this.selectionColor(true);
+    for (const { mesh, atoms, element } of this.ligandMeshes) {
+      const elementColor = new THREE.Color(ELEMENT_COLORS.get(element) ?? 0xcd83d2);
+      atoms.forEach((atom, i) => {
+        color.copy(byChain ? this.chainColors.get(this.atomChainKeys[atom]) : elementColor);
+        if (this.highlightedLigandAtoms.has(atom)) color.multiply(tint);
+        mesh.setColorAt(i, color);
+      });
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
+    const bondColor = new THREE.Color(0xd65358);
+    this.drawnMoleculePairs.forEach(([first, second], i) => {
+      const atom = [ROLE_LIGAND, 0].includes(this.sample.roles[first]) ? first : second;
+      this.ligandBonds.setColorAt(i, byChain ? this.chainColors.get(this.atomChainKeys[atom]) : bondColor);
+    });
+    if (this.ligandBonds.instanceColor) this.ligandBonds.instanceColor.needsUpdate = true;
   }
 
   updateProteinColors() {
@@ -331,8 +387,11 @@ export class MolecularViewer {
     this.sideBonds.instanceMatrix.needsUpdate = true;
     this.sideBonds.boundingSphere = null;
     cursor = 0;
+    this.drawnMoleculePairs = [];
     for (const [first, second] of this.moleculePairs) {
-      if (bondMatrix(this.ligandBonds, cursor, coords, first, second, 0.068)) cursor += 1;
+      if (bondMatrix(this.ligandBonds, cursor, coords, first, second, 0.068)) {
+        this.drawnMoleculePairs.push([first, second]); cursor += 1;
+      }
     }
     this.ligandBonds.count = cursor;
     this.ligandBonds.instanceMatrix.needsUpdate = true;
@@ -342,6 +401,7 @@ export class MolecularViewer {
       mesh.boundingSphere = null;
     }
     this.updateProteinColors();
+    this.updateLigandColors();
   }
 
   setReferenceVisible(visible) {
@@ -371,11 +431,14 @@ export class MolecularViewer {
     for (let atom = 0; atom < this.sample.atoms; atom += 1) box.expandByPoint(atomPosition(coords, atom, new THREE.Vector3()));
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3()).length();
-    this.controls.target.copy(center);
+    this.camera.up.set(0, 1, 0);
     this.camera.position.copy(center).add(new THREE.Vector3(size * 0.8, size * 0.6, size * 1.05));
     this.camera.near = Math.max(0.05, size / 500);
     this.camera.far = Math.max(1000, size * 10);
     this.camera.updateProjectionMatrix();
+    // Recreate controls to discard pending rotate/zoom/pan inertia on reset.
+    this.createControls();
+    this.controls.target.copy(center);
     this.controls.update();
   }
 
@@ -386,6 +449,7 @@ export class MolecularViewer {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    this.controls.handleResize();
   }
 
   animateFrame() {

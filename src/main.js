@@ -1,5 +1,6 @@
 import { DockingWebGpuModel } from "./model.js";
 import { MolecularViewer } from "./viewer.js";
+import { bindViewerColorControls } from "./viewer-color-controls.js";
 import { graphFromSmiles } from "./chemistry.js";
 import { loadCcdGraphs } from "./ccd.js";
 import { assetUrl, MODEL_MANIFEST_URL } from "./config.js";
@@ -21,7 +22,7 @@ const ui = Object.fromEntries([
   "example-tab", "custom-tab", "example-panel", "custom-panel", "pdb-input",
   "open-pdb", "chain-list", "ligand-list", "selection-count", "prepare-selection", "smiles-input", "replace-ligand", "structure-label",
   "pdb-id-input", "fetch-pdb", "show-reference",
-  "protein-color", "chain-colors",
+  "protein-color", "ligand-element-colors", "chain-colors",
   "active-ligand", "remove-ligand",
   "campaign-count", "run-campaign", "stop-campaign", "campaign-results", "campaign-result",
   "previous-result", "next-result", "download-result", "result-identities", "export-format",
@@ -67,15 +68,7 @@ mpnnControls = new MpnnControls({
   onSuggest: () => suggestResidues(),
 });
 createIcons({ icons: { ChevronLeft, ChevronRight, Download, Upload, X } });
-viewer.onSampleChange = () => {
-  ui['chain-colors'].hidden = viewer.proteinColorMode !== 'chain';
-  ui['chain-colors'].replaceChildren(...[...viewer.chainColors].map(([id, color]) => {
-    const entry = document.createElement('span'), swatch = document.createElement('i');
-    swatch.style.backgroundColor = `#${color.getHexString()}`;
-    entry.append(swatch, document.createTextNode(id || '(blank)')); return entry;
-  }));
-};
-ui['protein-color'].onchange = () => viewer.setProteinColorMode(ui['protein-color'].value);
+bindViewerColorControls(viewer, ui);
 const ligandLabel = g => `${g.options[0].atoms[0].rawResidue}${g.options.length > 1 ? ` +${g.options.length - 1}` : ''} / ${g.options[0].atoms[0].chain} (${g.atoms})`;
 
 function clearCampaign() {
@@ -87,10 +80,7 @@ function activeHighlight() {
   const labels = new Set(group?.options.flatMap(o => o.atoms.map(atomLocator)) ?? []);
   const active = new Set((viewer.sample?.atom_labels ?? []).flatMap((label, i) =>
     labels.has(label) || (group && label.startsWith(`replacement:${group.id}:`)) ? [i] : []));
-  for (const item of viewer.ligandMeshes ?? []) {
-    item.atoms.forEach((atom, i) => item.mesh.setColorAt(i, viewer.selectionColor(active.has(atom))));
-    if (item.mesh.instanceColor) item.mesh.instanceColor.needsUpdate = true;
-  }
+  viewer.highlightLigandAtoms(active);
 }
 
 viewer.onAtomPick = atom => {
