@@ -9,6 +9,8 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "test:prep": "node --test tests/prep.mjs tests/sequence.mjs tests/mpnn.mjs tests/pdb-export.mjs tests/backbone.mjs",
+    "test:viewer": "node --test tests/viewer.mjs tests/viewer-color-controls.mjs",
+    "test:viewer-browser": "node tests/viewer_browser.mjs",
     "test:campaign": "node tests/campaign_browser.mjs",
     "test:sequence-display": "node tests/sequence_display_browser.mjs",
     "test:mpnn": "node tests/mpnn_browser.mjs",
